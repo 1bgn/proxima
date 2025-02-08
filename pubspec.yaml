@@ -1,0 +1,40 @@
+name: proxima_reader
+description: "A new Flutter project."
+
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  get_it: ^8.0.3
+  injectable: ^2.5.0
+  freezed_annotation: ^2.4.4
+  flutter_bloc: ^9.0.0
+  go_router: ^14.8.0
+  json_annotation: ^4.9.0
+
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  freezed: ^2.5.7
+  build_runner: any
+  json_serializable: any
+  injectable_generator: any
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+assets:
+  - assets/books/
+
+
+flutter:
+
+  uses-material-design: true
+
