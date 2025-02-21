@@ -31,7 +31,7 @@ class GoRouterProvider {
                 return NoTransitionPage(
                     child: BlocProvider(
                       create: (context) => ReaderScreenController(getIt()),
-                      child: ReaderScreen(),
+                      child: BookReaderPage(),
                     ));
               }),
 
