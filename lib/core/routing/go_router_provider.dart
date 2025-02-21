@@ -5,7 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:injectable/injectable.dart';
 import 'package:proxima_reader/feature/reader_screen/presentation/controller/reader_screen_controller.dart';
-import 'package:proxima_reader/feature/reader_screen/presentation/ui/reader_screen.dart';
+import 'package:proxima_reader/feature/reader_screen/domain/utils/reader_screen.dart';
 import 'route_name.dart';
 
 import '../di/di_container.dart';
