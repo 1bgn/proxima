@@ -31,7 +31,7 @@ class _BookReaderPageState extends State<BookReaderPage> {
         _blocks = parsed;
       });
     } catch (e) {
-      debugPrint('Error: $e');
+      debugPrint('Error parse: $e');
       setState(() {
         _blocks = [];
       });
@@ -46,7 +46,7 @@ class _BookReaderPageState extends State<BookReaderPage> {
           return const Center(child: CircularProgressIndicator());
         }
         if (_blocks!.isEmpty) {
-          return const Center(child: Text('FB2 пуст или ошибка.'));
+          return const Center(child: Text("FB2 пуст / ошибка"));
         }
 
         final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -56,14 +56,13 @@ class _BookReaderPageState extends State<BookReaderPage> {
         }
 
         if (_pages == null || _pages!.isEmpty) {
-          return const Center(child: Text('Нет страниц.'));
+          return const Center(child: Text("Нет страниц"));
         }
 
-        // Листаем страницы
         return PageView.builder(
           itemCount: _pages!.length,
-          itemBuilder: (context, index) {
-            final page = _pages![index];
+          itemBuilder: (context, idx) {
+            final page = _pages![idx];
             return SafeArea(
               child: Container(
                 color: Colors.white,
@@ -79,37 +78,37 @@ class _BookReaderPageState extends State<BookReaderPage> {
   }
 
   Widget _buildPage(PageContent page) {
+    // каждый элемент - строка или картинка
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: page.blocks.map((block) {
-        return Container(
-          margin: EdgeInsets.only(
-            top: block.topSpacing,
-            bottom: block.bottomSpacing,
-          ),
-          child: _buildBlock(block),
-        );
-      }).toList(),
+      children: page.blocks.map((b) => _buildBlock(b)).toList(),
     );
   }
 
   Widget _buildBlock(ContentBlock block) {
-    if (block.type == BlockType.text && block.textSpan != null) {
-      return RichText(
-        text: block.textSpan!,
-        textAlign: block.textAlign,
-        softWrap: true,
-      );
-    } else if (block.type == BlockType.image && block.imageData != null) {
-      return Image.memory(
-        block.imageData!,
-        width: block.width,
-        height: block.height,
-        fit: BoxFit.contain,
-      );
-    } else {
-      // pageBreak
-      return const SizedBox.shrink();
-    }
+    return Container(
+      margin: EdgeInsets.only(
+        top: block.topSpacing,
+        bottom: block.bottomSpacing,
+      ),
+      child: () {
+        if (block.type == BlockType.text && block.textSpan != null) {
+          return RichText(
+            text: block.textSpan!,
+            textAlign: block.textAlign,
+            softWrap: true,
+          );
+        } else if (block.type == BlockType.image && block.imageData != null) {
+          return Image.memory(
+            block.imageData!,
+            width: block.width,
+            height: block.height,
+            fit: BoxFit.contain,
+          );
+        }
+        // pageBreak / unknown
+        return const SizedBox.shrink();
+      }(),
+    );
   }
 }
