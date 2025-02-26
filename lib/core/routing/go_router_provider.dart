@@ -31,7 +31,7 @@ class GoRouterProvider {
                 return NoTransitionPage(
                     child: BlocProvider(
                       create: (context) => ReaderScreenController(getIt()),
-                      child: Fb2ReaderWidget(),
+                      child:Scaffold(body: FB2ReaderScreen(),backgroundColor: Colors.white,),
                     ));
               }),
 

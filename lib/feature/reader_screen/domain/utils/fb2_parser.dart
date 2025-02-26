@@ -1,90 +1,207 @@
-import 'dart:typed_data';
+// fb2_parser.dart
+import 'dart:async';
 import 'dart:convert';
-import 'package:xml/xml.dart' as xml;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:proxima_reader/feature/reader_screen/domain/utils/custom_text_engine/inline_elements.dart';
+import 'package:proxima_reader/feature/reader_screen/domain/utils/custom_text_engine/paragraph_block.dart';
+import 'package:xml/xml.dart';
+import 'package:flutter/material.dart';
 
-/// Модель fb2-документа
-class Fb2Document {
-  final List<Chapter> chapters;
-  final Map<String, Uint8List> images;
-  Fb2Document({required this.chapters, required this.images});
-}
 
-/// Глава книги
-class Chapter {
-  final String title;
-  final List<Fb2Element> elements;
-  Chapter({required this.title, required this.elements});
-}
+import 'hyphenator.dart';
 
-/// Абстрактный элемент книги
-abstract class Fb2Element {}
+class FB2Parser {
+  final Hyphenator hyphenator;
 
-/// Параграф текста
-class Paragraph extends Fb2Element {
-  final String text;
-  Paragraph(this.text);
-}
+  FB2Parser(this.hyphenator);
 
-/// Изображение (ссылка на бинарные данные)
-class Fb2Image extends Fb2Element {
-  final String id;
-  Fb2Image(this.id);
-}
+  /// Парсит FB2 из указанного asset-пути (например, 'assets/book.fb2')
+  /// Возвращает список "глав" (chapterList), где каждая глава — список ParagraphBlock.
+  Future<List<ChapterData>> parseFB2FromAssets(String assetPath) async {
+    final content = await rootBundle.loadString(assetPath);
+    return parseFB2(content);
+  }
 
-/// Парсер fb2. Принимает XML-содержимое книги и возвращает Fb2Document.
-class Fb2Parser {
-  final String fb2Content;
-  Fb2Parser(this.fb2Content);
+  /// Основной метод разбора FB2-строки.
+  /// Возвращает список глав (ChapterData).
+  Future<List<ChapterData>> parseFB2(String fb2Text) async {
+    final document = XmlDocument.parse(fb2Text);
 
-  Fb2Document parse() {
-    final document = xml.parse(fb2Content);
-    List<Chapter> chapters = [];
-    Map<String, Uint8List> images = {};
+    // Собираем все binary (картинки) в Map
+    final binaryMap = <String, Future<ui.Image>>{};
+    for (final bin in document.findAllElements('binary')) {
+      final idAttr = bin.getAttribute('id');
+      if (idAttr == null) continue;
 
-    // Извлечение изображений (<binary>), декодирование base64
-    for (var binary in document.findAllElements('binary')) {
-      String? id = binary.getAttribute('id');
-      final base64data = binary.text.trim();
-      if (id != null && base64data.isNotEmpty) {
-        try {
-          images[id] = base64Decode(base64data);
-        } catch (_) {
-          images[id] = Uint8List(0); // fallback, если не удалось декодировать
+      // FB2 обычно хранит Base64
+      final base64Data = bin.innerText.trim();
+      final decoded = base64.decode(base64Data);
+
+      // Генерируем Future<ui.Image> (через decodeImageFromList)
+      final futureImage = decodeImageFromListAsync(decoded);
+      binaryMap[idAttr] = futureImage;
+    }
+
+    // Ищем основное <body>. Часто бывает один <body>, но может быть и несколько.
+    // Для примера возьмём самый первый <body>.
+    final body = document.findAllElements('body').isEmpty
+        ? null
+        : document.findAllElements('body').first;
+    if (body == null) {
+      // Нет тела => нет глав
+      return [];
+    }
+
+    // Каждая <section> будет считаться "главой"
+    final sections = body.findAllElements('section');
+    final chapters = <ChapterData>[];
+
+    for (final section in sections) {
+      final chapterParagraphs = <ParagraphBlock>[];
+
+      // Попробуем получить заголовок <title>, часто внутри <section><title><p>Заголовок</p></title>
+      final titleElem = section.findElements('title').isNotEmpty
+          ? section.findElements('title').first
+          : null;
+      if (titleElem != null) {
+        final titleText = titleElem.findElements('p').map((e) => e.text).join(' ');
+        if (titleText.isNotEmpty) {
+          // Прогоняем через hyphenator
+          final hyphText = hyphenator.hyphenate(titleText);
+          final paragraph = createParagraphBlock(
+            hyphText,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          );
+          chapterParagraphs.add(paragraph);
         }
+      }
+
+      // Парсим все абзацы <p>, плюс поддержка под-тегов типа <strong>, <emphasis> и т.п.
+      for (final p in section.findElements('p')) {
+        final paraBlock = parseParagraphElement(p, binaryMap);
+        if (paraBlock != null) {
+          chapterParagraphs.add(paraBlock);
+        }
+      }
+
+      // Пример: Если надо поддерживать и другие теги (например, <subtitle>, <poem>),
+      // мы могли бы аналогичным способом их обработать.
+
+      // Если в секции есть вложенные <section>, можно рекурсивно парсить;
+      // но здесь для упрощения пропустим.
+      // ...
+
+      // Если глава не пуста, добавим в список
+      if (chapterParagraphs.isNotEmpty) {
+        chapters.add(ChapterData(chapterParagraphs));
       }
     }
 
-    // Обработка тела книги – главы находятся в тегах <section>
-    for (var body in document.findAllElements('body')) {
-      for (var section in body.findAllElements('section')) {
-        String title = "";
-        List<Fb2Element> elements = [];
+    // Дожидаемся декодирования всех картинок (чтобы потом не было проблем при верстке).
+    // Но, возможно, вам удобнее декодировать "на лету" позже. Здесь — пример синхронизации.
+    await Future.wait(binaryMap.values);
 
-        var titleElement = section.getElement('title');
-        if (titleElement != null) {
-          // Внутри <title> обычно <p>
-          title = titleElement.text.trim();
+    return chapters;
+  }
+
+  /// Парсит один элемент <p> (со всеми вложенными).
+  /// Возвращает ParagraphBlock со списком InlineElement.
+  ParagraphBlock? parseParagraphElement(XmlElement pElem, Map<String, Future<ui.Image>> binaryMap) {
+    // Может быть внутри текста ещё <strong>, <emphasis>, <image>, и т.д.
+    // Для упрощения соберём всё в список инлайн-элементов.
+    final inlineElements = <InlineElement>[];
+
+    // Функция рекурсивного обхода вложенных нод, чтобы собрать текст/картинки
+    void visitNode(XmlNode node, TextStyle currentStyle) {
+      if (node is XmlText) {
+        // Текстовая нода
+        final rawText = node.text;
+        final trimmed = rawText.replaceAll('\n', ' ').replaceAll('\r', ' ');
+        if (trimmed.trim().isNotEmpty) {
+          // Пропустим через hyphenator
+          final hyphText = hyphenator.hyphenate(trimmed);
+          inlineElements.add(TextInlineElement(hyphText, currentStyle));
         }
-
-        for (var node in section.children) {
-          if (node is xml.XmlElement) {
-            if (node.name.local == 'p') {
-              elements.add(Paragraph(node.text.trim()));
-            } else if (node.name.local == 'image') {
-              var href = node.getAttribute('href') ?? node.getAttribute('l:href');
-              if (href != null && href.startsWith('#')) {
-                String id = href.substring(1);
-                elements.add(Fb2Image(id));
+      } else if (node is XmlElement) {
+        // Проверим тег
+        switch (node.name.local.toLowerCase()) {
+          case 'strong':
+            final newStyle = currentStyle.merge(const TextStyle(fontWeight: FontWeight.bold));
+            node.children.forEach((child) => visitNode(child, newStyle));
+            break;
+          case 'emphasis':
+            final newStyle = currentStyle.merge(const TextStyle(fontStyle: FontStyle.italic));
+            node.children.forEach((child) => visitNode(child, newStyle));
+            break;
+          case 'image':
+          // <image l:href="#id" />
+            final href = node.getAttribute('l:href') ?? node.getAttribute('href');
+            if (href != null && href.startsWith('#')) {
+              final id = href.substring(1); // убираем '#'
+              if (binaryMap.containsKey(id)) {
+                // Для примера зададим фиксированные размеры
+                final futureImage = binaryMap[id]!;
+                // Пока не можем сразу вставить ui.Image (это Future),
+                // поэтому вставим некий «заглушечный» inlineElement,
+                // а реально картинку подставим после получения.
+                // Но для наглядности в данном примере можно дожидаться futureImage сразу.
+                // Чтобы не усложнять, дождёмся здесь синхронно (await),
+                // но учтите, что метод тогда нужно сделать async.
               }
             }
-            // Дополнительная обработка других тегов fb2 при необходимости.
-          }
+            break;
+          default:
+          // Если что-то другое, рекурсивно обходим
+            node.children.forEach((child) => visitNode(child, currentStyle));
+            break;
         }
-
-        chapters.add(Chapter(title: title, elements: elements));
       }
     }
 
-    return Fb2Document(chapters: chapters, images: images);
+    visitNode(pElem, const TextStyle(fontSize: 16.0, color: Colors.black));
+
+    if (inlineElements.isEmpty) return null;
+
+    // Создаём абзац
+    return ParagraphBlock(
+      inlineElements: inlineElements,
+      textAlign: null, // Пусть глобальный возьмётся
+      textDirection: CustomTextDirection.ltr,
+      firstLineIndent: 0.0,
+      paragraphSpacing: 10.0,
+      minimumLines: 1,
+    );
   }
+
+  /// Упрощённая функция: создаёт ParagraphBlock из строки
+  ParagraphBlock createParagraphBlock(String text, {TextStyle? style}) {
+    final st = style ?? const TextStyle(fontSize: 16, color: Colors.black);
+    final inline = TextInlineElement(text, st);
+    return ParagraphBlock(
+      inlineElements: [inline],
+      textAlign: null,
+      textDirection: CustomTextDirection.ltr,
+      firstLineIndent: 0.0,
+      paragraphSpacing: 10.0,
+      minimumLines: 1,
+    );
+  }
+
+  /// Декодирование [Uint8List] в ui.Image через Future
+  Future<ui.Image> decodeImageFromListAsync(Uint8List data) {
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromList(data, (img) {
+      completer.complete(img);
+    },);
+    return completer.future;
+  }
+}
+
+/// Хранит список ParagraphBlock, относящихся к одной главе.
+class ChapterData {
+  final List<ParagraphBlock> paragraphs;
+
+  ChapterData(this.paragraphs);
 }
