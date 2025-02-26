@@ -1,167 +1,135 @@
 // reader_screen.dart
 import 'package:flutter/material.dart';
+import 'asset_fb2_loader.dart';
 import 'custom_text_engine/inline_elements.dart';
 import 'custom_text_engine/line_layout.dart';
 import 'custom_text_engine/paragraph_block.dart';
-import 'fb2_parser.dart';
 import 'hyphenator.dart';
-import 'large_book_paginator.dart';
+import 'lazy_chunks_paginator.dart';
 
 class ReaderScreen extends StatefulWidget {
-  final int initialPage; // с какой страницы начать
-  const ReaderScreen({Key? key, this.initialPage = 0}) : super(key: key);
+  final int startPage;
+  const ReaderScreen({Key? key, this.startPage = 0}) : super(key: key);
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
 
 class _ReaderScreenState extends State<ReaderScreen> {
-  bool _loading = true;
-  bool _layoutDone = false;
-
-  late LargeBookPaginator paginator;
+  late AssetFB2Loader loader;
+  late LazyChunksPaginator paginator;
+  bool inited = false;
   int currentPage = 0;
-  int totalPages = 1; // пока не знаем
+  final PageController pageController = PageController();
+  final TextEditingController pageFieldController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _initLoad();
+    _initAll();
   }
 
-  Future<void> _initLoad() async {
-    try {
-      // 1) Парсим
-      final parser = FB2Parser(Hyphenator());
-      final chapters = await parser.parseFB2FromAssets('assets/book.fb2');
-
-      // 2) Склеиваем все параграфы
-      final allParagraphs = <ParagraphBlock>[];
-      for (final ch in chapters) {
-        allParagraphs.addAll(ch.paragraphs);
+  Future<void> _initAll() async {
+    loader = AssetFB2Loader(
+      assetPath: 'assets/book.fb2',
+      hyphenator:  Hyphenator(),
+    );
+    paginator = LazyChunksPaginator(
+      loader: loader,
+      chunkSize: 50,
+      globalMaxWidth: 400,
+      lineSpacing: 4,
+      pageHeight: 600,
+      columns: 1,
+      columnSpacing: 20,
+      allowSoftHyphens: true,
+      lruCapacity: 5,
+    );
+    await paginator.init();
+    setState(() {
+      inited = true;
+      currentPage = widget.startPage;
+      pageFieldController.text = '$currentPage';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (pageController.hasClients) {
+        pageController.jumpToPage(currentPage);
       }
-
-      // 3) Создаём paginator
-      paginator = LargeBookPaginator(
-        paragraphs: allParagraphs,
-        globalMaxWidth: 400, // заглушка, реально берём из LayoutBuilder
-        lineSpacing: 4,
-        globalTextAlign: CustomTextAlign.left,
-        allowSoftHyphens: true,
-        columns: 1,
-        columnSpacing: 20,
-        pageHeight: 600,
-      );
-
-      setState(() {
-        _loading = false;
-      });
-    } catch (e, st) {
-      debugPrint('Ошибка: $e\n$st');
-      setState(() {
-        _loading = false;
-      });
-    }
+    });
   }
 
-  void _doLayout(double w, double h) {
-    // Пересобираем layout под реальные размеры
-    paginator.globalMaxWidth = w;
-    paginator.pageHeight = h;
-    paginator.layoutWholeBook();
-    totalPages = paginator.pageCount;
-    // init page
-    currentPage = widget.initialPage;
-    if (currentPage >= totalPages) {
-      currentPage = totalPages - 1;
+  void _gotoPage(int page) {
+    if (page < 0) page = 0;
+    setState(() {
+      currentPage = page;
+      pageFieldController.text = '$page';
+    });
+    if (pageController.hasClients) {
+      pageController.jumpToPage(page);
     }
-    _layoutDone = true;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Чтение FB2'),
+        title: Text('FB2 Reader'),
         actions: [
           IconButton(
-            icon: Icon(Icons.skip_next),
-            onPressed: () {
-              if (!_layoutDone) return;
-              setState(() {
-                currentPage = (currentPage + 1).clamp(0, totalPages - 1);
-              });
-            },
+            icon: Icon(Icons.remove),
+            onPressed: () => _gotoPage(currentPage - 1),
+          ),
+          SizedBox(
+            width: 60,
+            child: TextField(
+              controller: pageFieldController,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 16),
+              decoration: InputDecoration(border: InputBorder.none),
+              onSubmitted: (val) {
+                final p = int.tryParse(val) ?? currentPage;
+                _gotoPage(p);
+              },
+            ),
           ),
           IconButton(
-            icon: Icon(Icons.skip_previous),
-            onPressed: () {
-              if (!_layoutDone) return;
-              setState(() {
-                currentPage = (currentPage - 1).clamp(0, totalPages - 1);
-              });
-            },
+            icon: Icon(Icons.add),
+            onPressed: () => _gotoPage(currentPage + 1),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
+      body: !inited
+          ? Center(child: CircularProgressIndicator())
           : LayoutBuilder(
         builder: (ctx, constraints) {
-          final sw = constraints.maxWidth;
-          final sh = constraints.maxHeight;
-
-          if (!_layoutDone) {
-            // Один раз делаем layout
-            _doLayout(sw, sh);
-          }
-
-          // Получаем страницу
-          final page = paginator.getPage(currentPage);
-
-          return Column(
-            children: [
-              Expanded(
-                child: SinglePageViewer(
-                  page: page,
-                  lineSpacing: paginator.lineSpacing,
-                  textAlign: paginator.globalTextAlign,
-                  allowSoftHyphens: paginator.allowSoftHyphens,
-                ),
-              ),
-              Container(
-                color: Colors.grey[200],
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Row(
-                  children: [
-                    Text('Страница ${currentPage + 1} / $totalPages'),
-                    Spacer(),
-                    SizedBox(
-                      width: 60,
-                      child: TextField(
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          hintText: '№',
-                        ),
-                        onSubmitted: (val) {
-                          final p = int.tryParse(val) ?? 1;
-                          setState(() {
-                            currentPage = (p - 1).clamp(0, totalPages - 1);
-                          });
-                        },
-                      ),
-                    ),
-                    SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () {
-                        // Пример: go to page from textfield
-                      },
-                      child: Text('Go'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          paginator.globalMaxWidth = constraints.maxWidth;
+          paginator.pageHeight = constraints.maxHeight;
+          return PageView.builder(
+            controller: pageController,
+            onPageChanged: (index) {
+              setState(() {
+                currentPage = index;
+                pageFieldController.text = '$index';
+              });
+            },
+            itemBuilder: (ctx, index) {
+              return FutureBuilder(
+                future: paginator.getPage(index),
+                builder: (ctx, snapshot) {
+                  if (!snapshot.hasData) {
+                    return Center(child: CircularProgressIndicator());
+                  }
+                  final page = snapshot.data as MultiColumnPage;
+                  return SinglePageView(
+                    page: page,
+                    lineSpacing: paginator.lineSpacing,
+                    textAlign: CustomTextAlign.left,
+                    allowSoftHyphens: paginator.allowSoftHyphens,
+                  );
+                },
+              );
+            },
           );
         },
       ),
@@ -169,35 +137,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 }
 
-/// Отрисовываем одну страницу (MultiColumnPage) используя AdvancedTextRenderObject
-/// - Но он умеет рендерить только "первую страницу" из _layoutResult,
-///   поэтому сделаем временный движок, или напрямую рисуем.
-class SinglePageViewer extends LeafRenderObjectWidget {
+class SinglePageView extends LeafRenderObjectWidget {
   final MultiColumnPage page;
   final double lineSpacing;
   final CustomTextAlign textAlign;
   final bool allowSoftHyphens;
-
-  const SinglePageViewer({
+  const SinglePageView({
     Key? key,
     required this.page,
     required this.lineSpacing,
     required this.textAlign,
     required this.allowSoftHyphens,
   }) : super(key: key);
-
   @override
   RenderObject createRenderObject(BuildContext context) {
-    return SinglePageRenderObject(
+    return SinglePageRenderObj(
       page: page,
       lineSpacing: lineSpacing,
       textAlign: textAlign,
       allowSoftHyphens: allowSoftHyphens,
     );
   }
-
   @override
-  void updateRenderObject(BuildContext context, covariant SinglePageRenderObject renderObject) {
+  void updateRenderObject(BuildContext context, covariant SinglePageRenderObj renderObject) {
     renderObject
       ..page = page
       ..lineSpacing = lineSpacing
@@ -206,13 +168,12 @@ class SinglePageViewer extends LeafRenderObjectWidget {
   }
 }
 
-class SinglePageRenderObject extends RenderBox {
+class SinglePageRenderObj extends RenderBox {
   MultiColumnPage _page;
   double _lineSpacing;
   CustomTextAlign _textAlign;
   bool _allowSoftHyphens;
-
-  SinglePageRenderObject({
+  SinglePageRenderObj({
     required MultiColumnPage page,
     required double lineSpacing,
     required CustomTextAlign textAlign,
@@ -221,57 +182,48 @@ class SinglePageRenderObject extends RenderBox {
         _lineSpacing = lineSpacing,
         _textAlign = textAlign,
         _allowSoftHyphens = allowSoftHyphens;
-
   set page(MultiColumnPage v) {
     if (_page != v) {
       _page = v;
       markNeedsLayout();
     }
   }
-
   set lineSpacing(double v) {
     if (_lineSpacing != v) {
       _lineSpacing = v;
       markNeedsLayout();
     }
   }
-
   set textAlign(CustomTextAlign v) {
     if (_textAlign != v) {
       _textAlign = v;
       markNeedsLayout();
     }
   }
-
   set allowSoftHyphens(bool v) {
     if (_allowSoftHyphens != v) {
       _allowSoftHyphens = v;
       markNeedsLayout();
     }
   }
-
   @override
   void performLayout() {
     size = constraints.biggest;
   }
-
   @override
   void paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
     final colWidth = _page.columnWidth;
-    final colSpacing = _page.columnSpacing;
-
+    final spacing = _page.columnSpacing;
     for (int colIndex = 0; colIndex < _page.columns.length; colIndex++) {
       final colLines = _page.columns[colIndex];
-      final colX = offset.dx + colIndex * (colWidth + colSpacing);
+      final colX = offset.dx + colIndex * (colWidth + spacing);
       double dy = offset.dy;
-
-      for (int lineIndex = 0; lineIndex < colLines.length; lineIndex++) {
-        final line = colLines[lineIndex];
+      for (int lineI = 0; lineI < colLines.length; lineI++) {
+        final line = colLines[lineI];
         final lineTop = dy;
         double dx = colX;
         final extraSpace = colWidth - line.width;
-
         int gapCount = 0;
         if (_textAlign == CustomTextAlign.justify && line.elements.length > 1) {
           for (int e = 0; e < line.elements.length - 1; e++) {
@@ -282,7 +234,6 @@ class SinglePageRenderObject extends RenderBox {
             }
           }
         }
-
         switch (_textAlign) {
           case CustomTextAlign.left:
             dx = colX;
@@ -297,27 +248,22 @@ class SinglePageRenderObject extends RenderBox {
             dx = colX;
             break;
         }
-
-        for (int eIndex = 0; eIndex < line.elements.length; eIndex++) {
-          final elem = line.elements[eIndex];
+        for (int e = 0; e < line.elements.length; e++) {
+          final elem = line.elements[e];
           final baselineShift = line.baseline - elem.baseline;
           final elemOffset = Offset(dx, lineTop + baselineShift);
-
-          double gapExtra = 0.0;
-          if (_textAlign == CustomTextAlign.justify && gapCount > 0 && eIndex < line.elements.length - 1) {
-            final nextElem = line.elements[eIndex + 1];
+          double gapExtra = 0;
+          if (_textAlign == CustomTextAlign.justify && gapCount > 0 && e < line.elements.length - 1) {
+            final nextElem = line.elements[e + 1];
             if (elem is TextInlineElement && nextElem is TextInlineElement) {
               gapExtra = extraSpace / gapCount;
             }
           }
-
           elem.paint(canvas, elemOffset);
-
           dx += elem.width + gapExtra;
         }
-
         dy += line.height;
-        if (lineIndex < colLines.length - 1) {
+        if (lineI < colLines.length - 1) {
           dy += _lineSpacing;
         }
       }
