@@ -1,52 +1,37 @@
-/// inline_elements.dart
-///
-/// Содержит базовые классы «инлайновых» элементов: текст, ссылка, изображение.
-
+// inline_elements.dart
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
-/// Определяет направление текста (LTR / RTL).
+/// Направление текста
 enum CustomTextDirection {
   ltr,
   rtl,
 }
 
-/// Тип отображения изображения: блочное (block) или инлайновое (inline).
+/// Тип отображения изображения
 enum ImageDisplayMode {
   inline,
   block,
 }
 
-/// Базовый класс для любого «инлайнового» элемента.
+/// Базовый интерфейс для «инлайнового элемента» (текст, картинка, ссылка).
 abstract class InlineElement {
-  /// Итоговая ширина элемента после layout.
   double width = 0.0;
-
-  /// Итоговая высота элемента после layout.
   double height = 0.0;
-
-  /// Позиция базовой линии (baseline) относительно верхнего края элемента.
-  /// Для текста — обычно ascent, для изображений может быть равной [height].
   double baseline = 0.0;
 
-  /// Прямоугольники для выделения (selection).
   List<Rect> selectionRects = [];
 
-  /// Вычисляет размеры (width/height/baseline) элемента при заданной максимальной ширине.
   void performLayout(double maxWidth);
-
-  /// Отрисовывает элемент на [canvas] по координатам [offset].
   void paint(ui.Canvas canvas, Offset offset);
 
-  /// Возвращает интерактивные зоны (например, для клика по ссылке).
-  /// По умолчанию — пусто.
   List<Rect> getInteractiveRects(Offset offset) => [];
 }
 
-/// Текстовый элемент.
+/// Текстовый элемент
 class TextInlineElement extends InlineElement {
-  final String text;
-  final TextStyle style;
+  String text;
+  TextStyle style;
 
   ui.Paragraph? _paragraph;
 
@@ -54,32 +39,33 @@ class TextInlineElement extends InlineElement {
 
   @override
   void performLayout(double maxWidth) {
-    final builder = ui.ParagraphBuilder(
-      ui.ParagraphStyle(
-        fontFamily: style.fontFamily,
-        fontSize: style.fontSize,
-        fontWeight: style.fontWeight,
-        fontStyle: style.fontStyle,
-      ),
-    );
-    builder.pushStyle(ui.TextStyle(
-      color: style.color,
+    final pb = ui.ParagraphBuilder(ui.ParagraphStyle(
       fontSize: style.fontSize,
       fontFamily: style.fontFamily,
+      fontWeight: style.fontWeight,
+      fontStyle: style.fontStyle,
+    ));
+
+    pb.pushStyle(ui.TextStyle(
+      color: style.color,
+      fontSize: style.fontSize,
       fontWeight: style.fontWeight,
       fontStyle: style.fontStyle,
       letterSpacing: style.letterSpacing,
       wordSpacing: style.wordSpacing,
       height: style.height,
     ));
-    builder.addText(text);
+    pb.addText(text);
 
-    final paragraph = builder.build();
+    final paragraph = pb.build();
     paragraph.layout(ui.ParagraphConstraints(width: maxWidth));
-    _paragraph = paragraph;
 
+    _paragraph = paragraph;
+    // используйте paragraph.longestLine / paragraph.maxIntrinsicWidth,
+    // решайте сами.
     width = paragraph.maxIntrinsicWidth;
     height = paragraph.height;
+
     final metrics = paragraph.computeLineMetrics();
     if (metrics.isNotEmpty) {
       baseline = metrics.first.ascent;
@@ -87,12 +73,11 @@ class TextInlineElement extends InlineElement {
       baseline = height;
     }
 
-    // Заполним selectionRects
     selectionRects = [];
     if (text.isNotEmpty) {
       final boxes = paragraph.getBoxesForRange(0, text.length);
-      for (final box in boxes) {
-        final rect = Rect.fromLTWH(box.left, box.top, box.right - box.left, box.bottom - box.top);
+      for (final b in boxes) {
+        final rect = Rect.fromLTWH(b.left, b.top, b.right - b.left, b.bottom - b.top);
         selectionRects.add(rect);
       }
     }
@@ -111,7 +96,7 @@ class TextInlineElement extends InlineElement {
   }
 }
 
-/// Ссылка (inline). Аналогична TextInlineElement, но при paint добавляем подчёркивание.
+/// Ссылка (inline)
 class InlineLinkElement extends TextInlineElement {
   final String url;
 
@@ -121,18 +106,17 @@ class InlineLinkElement extends TextInlineElement {
   void paint(ui.Canvas canvas, Offset offset) {
     super.paint(canvas, offset);
     if (_paragraph != null) {
-      final linkColor = style.color ?? Colors.blue;
-      final paint = Paint()..color = linkColor;
+      final paint = Paint()..color = (style.color ?? Colors.blue);
       for (final r in selectionRects) {
         final shifted = r.shift(offset);
-        final underlineRect = Rect.fromLTWH(shifted.left, shifted.bottom - 1, shifted.width, 1);
-        canvas.drawRect(underlineRect, paint);
+        final lineRect = Rect.fromLTWH(shifted.left, shifted.bottom - 1, shifted.width, 1);
+        canvas.drawRect(lineRect, paint);
       }
     }
   }
 }
 
-/// Изображение (inline / block).
+/// Изображение
 class ImageInlineElement extends InlineElement {
   final ui.Image image;
   final double desiredWidth;
@@ -148,23 +132,16 @@ class ImageInlineElement extends InlineElement {
 
   @override
   void performLayout(double maxWidth) {
-    if (mode == ImageDisplayMode.block) {
-      final w = (desiredWidth > maxWidth) ? maxWidth : desiredWidth;
-      width = w;
-      height = desiredHeight;
-      baseline = height;
-    } else {
-      final w = (desiredWidth > maxWidth) ? maxWidth : desiredWidth;
-      width = w;
-      height = desiredHeight;
-      baseline = height;
-    }
+    final w = (desiredWidth > maxWidth) ? maxWidth : desiredWidth;
+    width = w;
+    height = desiredHeight;
+    baseline = height; // упрощённо
   }
 
   @override
   void paint(ui.Canvas canvas, Offset offset) {
-    final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-    final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
-    canvas.drawImageRect(image, srcRect, dstRect, Paint());
+    final src = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final dst = Rect.fromLTWH(offset.dx, offset.dy, width, height);
+    canvas.drawImageRect(image, src, dst, Paint());
   }
 }

@@ -4,28 +4,39 @@ import 'custom_text_engine/line_layout.dart';
 import 'custom_text_engine/paragraph_block.dart';
 import 'custom_text_engine/text_layout_engine.dart';
 
-/// Класс, который раскладывает всю книгу (список ParagraphBlock) и
-/// хранит в массиве offsets начало каждой страницы, чтобы можно было быстро
-/// прыгать к странице N без полного пересчёта.
-class LargeBookPaginator {
-  final List<ParagraphBlock> paragraphs;
-  final double globalMaxWidth;
-  final double lineSpacing;
-  final CustomTextAlign globalTextAlign;
-  final bool allowSoftHyphens;
-  final int columns;
-  final double columnSpacing;
-  final double pageHeight;
+import 'dart:math' as math;
 
-  // Результат раскладки (все строки).
+/// Предположим, вы хотите:
+///  1) Один раз получить «сплошной» список строк (LineLayout) на всю книгу.
+///  2) Сохранить «pageOffsets» — индексы начала каждой страницы.
+///  3) Позволять быстро переходить к странице N.
+///
+/// При этом ваш текущий text_layout_engine.dart возвращает MultiColumnPagedLayout.
+/// Но мы хотим «сырые» строки (CustomTextLayout).
+/// -> добавляем публичный метод layoutParagraphsOnly().
+/// Вам нужно в вашем AdvancedLayoutEngine:
+///    CustomTextLayout layoutParagraphsOnly() => _layoutAllParagraphs();
+///
+/// Тогда LargeBookPaginator вызывает engine.layoutParagraphsOnly()
+/// и сам вручную разбивает на страницы.
+
+class LargeBookPaginator {
+  // Параметры, аналогичные движку
+  double globalMaxWidth;
+  double lineSpacing;
+  final CustomTextAlign globalTextAlign;
+  bool allowSoftHyphens;
+  int columns;
+  double columnSpacing;
+  double pageHeight;
+
+  final List<ParagraphBlock> paragraphs;
+
+  // Храним "плоский" список строк
   late CustomTextLayout _flatLayout;
 
-  // Массив с индексами строк, с которых начинается каждая страница.
-  // pageOffsets[0] = 0 (начинается с 0-й строки),
-  // pageOffsets[1] = индекс строки, с которой начинается 2-я страница, и т.д.
+  // Массив pageOffsets[n] = индекс строки, с которой начинается страница n
   final List<int> pageOffsets = [];
-
-  // Общее число страниц:
   int totalPages = 0;
 
   LargeBookPaginator({
@@ -39,7 +50,8 @@ class LargeBookPaginator {
     required this.pageHeight,
   });
 
-  /// Раскладываем книгу, формируем offsets.
+  /// Выполняем раскладку абзацев «в плоский вид» (без колонок).
+  /// Затем сами считаем постраничное деление (pageOffsets).
   void layoutWholeBook() {
     final engine = AdvancedLayoutEngine(
       paragraphs: paragraphs,
@@ -52,96 +64,113 @@ class LargeBookPaginator {
       pageHeight: pageHeight,
     );
 
-    // но! engine.layoutAll() возвращает готовые страницы => memory heavy
-    // В большом тексте pages могут занимать много памяти (храним все LineLayout).
-    // Для "ленивого" подхода нужно ещё глубже переписывать.
+    // В text_layout_engine.dart добавлен public метод layoutParagraphsOnly(),
+    // который возвращает CustomTextLayout (список LineLayout).
+    _flatLayout = engine.layoutParagraphsOnly();
 
-    final layout = engine.layoutAll();
-    _flatLayout = CustomTextLayout(
-      lines: layout.lines, // <- В реальности, lines: ...,
-      totalHeight: layout.totalHeight,
-      paragraphIndexOfLine: layout.paragraphIndexOfLine,
-    );
-
-    // Но layoutAll() уже вернул MultiColumnPagedLayout (layout.pages).
-    // Можем просто взять layout.pages.length => totalPages.
-    final totalP = layout.pages.length;
-    totalPages = totalP;
-
-    // Заполним pageOffsets:
-    pageOffsets.clear();
-    int accum = 0;
-    for (int i = 0; i < totalP; i++) {
-      pageOffsets.add(accum);
-      // Узнаём, сколько строк в i-й странице
-      final page = layout.pages[i];
-      int pageLines = 0;
-      for (final col in page.columns) {
-        pageLines += col.length;
-      }
-      accum += pageLines;
-    }
-    // pageOffsets[n] = индекс строки, с которой начинается страница n.
+    // Теперь _flatLayout.lines хранит все строки целой книги (без колоночной разбивки).
+    _buildPageOffsets(_flatLayout.lines);
   }
 
-  /// Получить количество страниц
   int get pageCount => totalPages;
 
-  /// Быстрый переход к странице [pageIndex].
-  /// Возвращает список LineLayout, которые нужно рендерить на этой странице, разбитые по колонкам.
-  /// NB: по сути, мы восстанавливаем columns, lineSpacing, etc. => упрощённо воспроизводим _buildMultiColumnPages для одной страницы.
+  /// Получаем MultiColumnPage для страницы [pageIndex].
+  /// То есть внутри мы берём нужный блок строк (start..end) и разбиваем на колонки,
+  /// повторяя (упрощённо) логику, которая в движке.
   MultiColumnPage getPage(int pageIndex) {
     if (pageIndex < 0 || pageIndex >= totalPages) {
-      // Возвращаем пустую?
+      // Пустая
       return MultiColumnPage(
         columns: [],
         pageWidth: globalMaxWidth,
         pageHeight: pageHeight,
-        columnWidth: (globalMaxWidth - columnSpacing * (columns - 1)) / columns,
+        columnWidth: 1,
         columnSpacing: columnSpacing,
       );
     }
 
-    final startLineIndex = pageOffsets[pageIndex];
-    int endLineIndex = (pageIndex == totalPages - 1)
+    final start = pageOffsets[pageIndex];
+    final end = (pageIndex == totalPages - 1)
         ? _flatLayout.lines.length
         : pageOffsets[pageIndex + 1];
+    final linesForPage = _flatLayout.lines.sublist(start, end);
 
-    final lines = _flatLayout.lines.sublist(startLineIndex, endLineIndex);
+    // Разбиваем linesForPage по колонкам
+    return _buildColumns(linesForPage);
+  }
 
-    // Теперь разбиваем lines по колонкам
-    // (повторяем логику _buildMultiColumnPages, но только для одной "page").
-    final colWidth = (globalMaxWidth - columnSpacing * (columns - 1)) / columns;
-    final pageColumns = <List<LineLayout>>[];
-    int localIndex = 0;
-    while (localIndex < lines.length) {
-      if (pageColumns.length == columns) break; // все колонки
+  // ----------------------------------------------------------------------------
+  // Вспомогательные методы:
 
+  /// Простое деление массива строк на страницы по высоте [pageHeight].
+  void _buildPageOffsets(List<LineLayout> lines) {
+    pageOffsets.clear();
+    if (lines.isEmpty) {
+      pageOffsets.add(0);
+      totalPages = 1;
+      return;
+    }
+    int currentLine = 0;
+    double usedHeight = 0.0;
+
+    pageOffsets.add(0); // первая страница с 0-й строки
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (i == currentLine) {
+        usedHeight = line.height;
+      } else {
+        final needed = usedHeight + lineSpacing + line.height;
+        if (needed <= pageHeight) {
+          usedHeight = needed;
+        } else {
+          // новая страница
+          currentLine = i;
+          pageOffsets.add(currentLine);
+          usedHeight = line.height;
+        }
+      }
+    }
+    totalPages = pageOffsets.length;
+  }
+
+  /// Разбиваем linesForPage на колонки, аналогично _buildMultiColumnPages,
+  /// только для одной страницы.
+  MultiColumnPage _buildColumns(List<LineLayout> linesForPage) {
+    final totalColsSpacing = columnSpacing * (columns - 1);
+    final colWidth = (globalMaxWidth - totalColsSpacing) / columns;
+
+    final pageCols = <List<LineLayout>>[];
+    int idx = 0;
+
+    while (idx < linesForPage.length) {
+      if (pageCols.length == columns) break;
       final colLines = <LineLayout>[];
       double usedHeight = 0.0;
-      while (localIndex < lines.length) {
-        final line = lines[localIndex];
+
+      while (idx < linesForPage.length) {
+        final line = linesForPage[idx];
         final lineHeight = line.height;
         if (colLines.isEmpty) {
           colLines.add(line);
           usedHeight = lineHeight;
-          localIndex++;
+          idx++;
         } else {
           final needed = usedHeight + lineSpacing + lineHeight;
           if (needed <= pageHeight) {
             colLines.add(line);
             usedHeight = needed;
-            localIndex++;
+            idx++;
           } else {
             break;
           }
         }
       }
-      pageColumns.add(colLines);
+
+      pageCols.add(colLines);
     }
 
     return MultiColumnPage(
-      columns: pageColumns,
+      columns: pageCols,
       pageWidth: globalMaxWidth,
       pageHeight: pageHeight,
       columnWidth: colWidth,

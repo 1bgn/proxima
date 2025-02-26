@@ -336,4 +336,7 @@ class AdvancedLayoutEngine {
     }
     return null;
   }
+  CustomTextLayout layoutParagraphsOnly() {
+    return _layoutAllParagraphs();
+  }
 }
