@@ -6,9 +6,9 @@
 import 'inline_elements.dart';
 
 /// Описание одной строки, состоящей из нескольких [InlineElement].
-class LineLayout2 {
+class LineLayout {
   /// Список элементов в строке.
-  final List<InlineElement> elements = [];
+   List<InlineElement> elements = [];
 
   /// Итоговая ширина строки.
   double width = 0.0;
@@ -29,7 +29,7 @@ class LineLayout2 {
 /// Результат раскладки «в один плоский список строк».
 class CustomTextLayout {
   /// Все строки (LineLayout).
-  final List<LineLayout2> lines;
+  final List<LineLayout> lines;
 
   /// Общая «виртуальная» высота (без учёта реальных страниц).
   final double totalHeight;
@@ -47,7 +47,7 @@ class CustomTextLayout {
 /// Описание одной «страницы» с несколькими колонками.
 class MultiColumnPage {
   /// Список колонок. Каждая колонка — список строк.
-  final List<List<LineLayout2>> columns;
+  final List<List<LineLayout>> columns;
 
   /// Ширина всей страницы.
   final double pageWidth;

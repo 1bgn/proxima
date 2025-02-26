@@ -1,19 +1,18 @@
-// fb2_reader_widget.dart
+// fb2_reader_screen.dart
+import 'package:flutter/material.dart';
+import 'package:proxima_reader/feature/reader_screen/domain/utils/paginator.dart';
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
-import 'package:proxima_reader/feature/reader_screen/domain/utils/custom_text_engine/line_layout.dart';
-import 'package:proxima_reader/feature/reader_screen/domain/utils/custom_text_engine/paragraph_block.dart';
-import 'package:proxima_reader/feature/reader_screen/domain/utils/hyphenator.dart';
-import 'package:proxima_reader/feature/reader_screen/domain/utils/paginator.dart';
-import 'dart:async';
-
+// Важно: проверьте правильный путь к этим файлам
 import 'custom_text_engine/inline_elements.dart';
+import 'custom_text_engine/line_layout.dart';
+import 'custom_text_engine/paragraph_block.dart';
+import 'custom_text_engine/text_layout_engine.dart';
+
 import 'fb2_parser.dart';
+import 'hyphenator.dart';
 
-
-/// Экран (Widget) без AppBar, который загружает FB2 из assets,
-/// парсит, верстает и отображает постранично.
+// Примерный вариант экрана чтения
 class FB2ReaderScreen extends StatefulWidget {
   const FB2ReaderScreen({Key? key}) : super(key: key);
 
@@ -22,91 +21,87 @@ class FB2ReaderScreen extends StatefulWidget {
 }
 
 class _FB2ReaderScreenState extends State<FB2ReaderScreen> {
-  Future<MultiColumnPagedLayout>? _layoutFuture;
-
-  // Можно хранить отладочно ещё общее число страниц
-  int _pageCount = 0;
+  List<ChapterData>? _chapters;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _layoutFuture = _buildPagedLayout();
+    _initParsing();
   }
 
-  /// Асинхронная сборка раскладки
-  Future<MultiColumnPagedLayout> _buildPagedLayout() async {
-    // 1) Создаем парсер
-    final parser = FB2Parser(Hyphenator());
-    // 2) Парсим главы
-    final chapters = await parser.parseFB2FromAssets('assets/book.fb2');
-    // 3) Настраиваем «пагинатор»
-    final paginator = FB2Paginator(
-      globalMaxWidth: 300, // заглушка, актуальные размеры возьмём из LayoutBuilder
-      lineSpacing: 4.0,
-      globalTextAlign: CustomTextAlign.left,
-      allowSoftHyphens: true,
-      columns: 1,
-      columnSpacing: 20,
-      pageHeight: 400,
-    );
-    // Собираем layout (но здесь ширина/высота стоит заглушкой)
-    // NB: В реальности, нам нужно знать реальную ширину/высоту из LayoutBuilder,
-    //     поэтому окончательный layout стоит строить уже в build().
-    final multiLayout = paginator.layoutAllChapters(chapters);
-    return multiLayout;
+  Future<void> _initParsing() async {
+    try {
+      // Создаем парсер, сразу в нём создаём Hyphenator
+      final parser = FB2Parser(Hyphenator());
+      final chapters = await parser.parseFB2FromAssets('assets/book.fb2');
+      setState(() {
+        _chapters = chapters;
+        _loading = false;
+      });
+    } catch (e, st) {
+      debugPrint('Ошибка при парсинге: $e\n$st');
+      setState(() {
+        _chapters = [];
+        _loading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (ctx, constraints) {
-        final maxWidth = constraints.maxWidth;
-        final maxHeight = constraints.maxHeight;
+    return Scaffold(
+      // без appBar, если не нужно
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : (_chapters == null || _chapters!.isEmpty)
+          ? const Center(child: Text('Нет глав'))
+          : LayoutBuilder(
+        builder: (ctx, constraints) {
+          final screenWidth = constraints.maxWidth;
+          final screenHeight = constraints.maxHeight;
 
-        return FutureBuilder<MultiColumnPagedLayout>(
-          future: _layoutFuture,
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final multiLayout = snapshot.data!;
-            final totalPages = multiLayout.pages.length;
-            _pageCount = totalPages;
+          // Выполняем пагинацию
+          final paginator = FB2Paginator(
+            globalMaxWidth: screenWidth,
+            lineSpacing: 4.0,
+            globalTextAlign: CustomTextAlign.left,
+            allowSoftHyphens: true,
+            columns: 1,
+            columnSpacing: 20.0,
+            pageHeight: screenHeight,
+          );
+          final multiLayout = paginator.layoutAllChapters(_chapters!);
 
-            if (totalPages == 0) {
-              return const Center(child: Text("Нет страниц"));
-            }
+          if (multiLayout.pages.isEmpty) {
+            return const Center(child: Text('Пусто'));
+          }
 
-            // Строим PageView, где каждая страница -> виджет,
-            // умеющий рендерить нужный pageIndex.
-            return PageView.builder(
-              itemCount: totalPages,
-              itemBuilder: (context, index) {
-                // Собираем все параграфы, но отрисовываем только нужную страницу
-                // (ниже покажем кастомный AdvancedTextWidgetWithPageIndex)
-                return AdvancedTextWidgetWithPageIndex(
-                  multiLayout: multiLayout,
-                  pageIndex: index,
-                  width: maxWidth,
-                  pageHeight: maxHeight,
-                  lineSpacing: 4.0,
-                  textAlign: CustomTextAlign.left,
-                  allowSoftHyphens: true,
-                  columns: 1,
-                  columnSpacing: 20.0,
-                );
-              },
-            );
-          },
-        );
-      },
+          // Показываем постранично
+          return PageView.builder(
+            itemCount: multiLayout.pages.length,
+            itemBuilder: (context, pageIndex) {
+              return _SinglePageView(
+                multiLayout: multiLayout,
+                pageIndex: pageIndex,
+                width: screenWidth,
+                pageHeight: screenHeight,
+                lineSpacing: 4.0,
+                textAlign: CustomTextAlign.left,
+                allowSoftHyphens: true,
+                columns: 1,
+                columnSpacing: 20.0,
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
 
-/// Пример виджета, который умеет рендерить конкретную страницу (pageIndex)
-/// из готового MultiColumnPagedLayout.
-class AdvancedTextWidgetWithPageIndex extends LeafRenderObjectWidget {
+/// Простейший виджет, отрисовывающий одну страницу (pageIndex)
+class _SinglePageView extends LeafRenderObjectWidget {
   final MultiColumnPagedLayout multiLayout;
   final int pageIndex;
 
@@ -118,7 +113,7 @@ class AdvancedTextWidgetWithPageIndex extends LeafRenderObjectWidget {
   final int columns;
   final double columnSpacing;
 
-  const AdvancedTextWidgetWithPageIndex({
+  const _SinglePageView({
     Key? key,
     required this.multiLayout,
     required this.pageIndex,
@@ -133,7 +128,7 @@ class AdvancedTextWidgetWithPageIndex extends LeafRenderObjectWidget {
 
   @override
   RenderObject createRenderObject(BuildContext context) {
-    return AdvancedTextWithPagesRenderObject(
+    return _SinglePageRenderObject(
       multiLayout: multiLayout,
       pageIndex: pageIndex,
       width: width,
@@ -147,7 +142,7 @@ class AdvancedTextWidgetWithPageIndex extends LeafRenderObjectWidget {
   }
 
   @override
-  void updateRenderObject(BuildContext context, covariant AdvancedTextWithPagesRenderObject renderObject) {
+  void updateRenderObject(BuildContext context, covariant _SinglePageRenderObject renderObject) {
     renderObject
       ..multiLayout = multiLayout
       ..pageIndex = pageIndex
@@ -161,8 +156,7 @@ class AdvancedTextWidgetWithPageIndex extends LeafRenderObjectWidget {
   }
 }
 
-/// Специализированный RenderObject, который рендерит конкретную страницу (pageIndex).
-class AdvancedTextWithPagesRenderObject extends RenderBox {
+class _SinglePageRenderObject extends RenderBox {
   MultiColumnPagedLayout _multiLayout;
   int _pageIndex;
   double _width;
@@ -173,7 +167,7 @@ class AdvancedTextWithPagesRenderObject extends RenderBox {
   int _columns;
   double _columnSpacing;
 
-  AdvancedTextWithPagesRenderObject({
+  _SinglePageRenderObject({
     required MultiColumnPagedLayout multiLayout,
     required int pageIndex,
     required double width,
@@ -258,36 +252,30 @@ class AdvancedTextWithPagesRenderObject extends RenderBox {
 
   @override
   void performLayout() {
-    // Ширину ставим как минимум нужную, но не больше constraints.maxWidth
     final cWidth = constraints.maxWidth.isFinite
         ? math.min(_width, constraints.maxWidth)
         : _width;
-
     final cHeight = constraints.maxHeight.isFinite
         ? math.min(_pageHeight, constraints.maxHeight)
         : _pageHeight;
-
     size = Size(cWidth, cHeight);
   }
 
   @override
   void paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
-
     if (_pageIndex < 0 || _pageIndex >= _multiLayout.pages.length) {
-      // Нет такой страницы
-      // Можно вывести «Пусто»
-      final textPainter = TextPainter(
-        text: const TextSpan(text: "Нет данных"),
+      final tp = TextPainter(
+        text: const TextSpan(text: 'Нет такой страницы'),
         textDirection: TextDirection.ltr,
       );
-      textPainter.layout();
-      textPainter.paint(canvas, offset);
+      tp.layout();
+      tp.paint(canvas, offset);
       return;
     }
 
     final page = _multiLayout.pages[_pageIndex];
-    // См. как в AdvancedTextRenderObject: рисуем все колонки
+
     for (int colI = 0; colI < page.columns.length; colI++) {
       final colLines = page.columns[colI];
       final colX = offset.dx + colI * (page.columnWidth + page.columnSpacing);
@@ -299,7 +287,7 @@ class AdvancedTextWithPagesRenderObject extends RenderBox {
         double dx = colX;
         final extraSpace = page.columnWidth - line.width;
 
-        // Количество «пробелов» для justify
+        // Считаем количество «пробелов» для justify
         int gapCount = 0;
         if (_textAlign == CustomTextAlign.justify && line.elements.length > 1) {
           for (int eIndex = 0; eIndex < line.elements.length - 1; eIndex++) {
@@ -311,7 +299,7 @@ class AdvancedTextWithPagesRenderObject extends RenderBox {
           }
         }
 
-        // Определяем смещение dx по выравниванию
+        // Определяем dx по выравниванию
         switch (_textAlign) {
           case CustomTextAlign.left:
             dx = colX;
@@ -327,7 +315,7 @@ class AdvancedTextWithPagesRenderObject extends RenderBox {
             break;
         }
 
-        // Рисуем каждый InlineElement
+        // Рисуем элементы строки
         for (int eIndex = 0; eIndex < line.elements.length; eIndex++) {
           final elem = line.elements[eIndex];
           final baselineShift = line.baseline - elem.baseline;
@@ -341,7 +329,7 @@ class AdvancedTextWithPagesRenderObject extends RenderBox {
             }
           }
 
-          // Рисуем сам элемент
+          // Отрисовка элемента
           elem.paint(canvas, elemOffset);
 
           dx += elem.width + gapExtra;

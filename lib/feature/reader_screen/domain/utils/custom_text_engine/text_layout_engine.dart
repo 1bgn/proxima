@@ -1,44 +1,20 @@
-/// text_layout_engine.dart
-///
-/// Основной движок верстки (AdvancedLayoutEngine).
-///  1. Раскладывает параграфы в строки (LineLayout).
-///  2. Разбивает на страницы и колонки.
-///  3. Применяет (упрощённо) логику сирот и вдов.
-///  4. Учитывает переноси по \u00AD (мягкий перенос).
-///
-/// Можно расширять логику для полноценного BiDi,
-/// более сложного justify, и т.д.
+// lib/custom_text_engine/text_layout_engine.dart
+//
+// Раскладывает абзацы в строки, обрабатывает пробелы, пунктуацию и мягкие переносы.
 
-import 'package:flutter/material.dart';
 import 'dart:math' as math;
-
 import 'inline_elements.dart';
 import 'paragraph_block.dart';
 import 'line_layout.dart';
 
-/// Основной класс-движок, который всё разбивает.
 class AdvancedLayoutEngine {
   final List<ParagraphBlock> paragraphs;
-
-  /// Ширина для верстки (например, ширина экрана или контейнера).
   final double globalMaxWidth;
-
-  /// Межстрочный интервал.
   final double lineSpacing;
-
-  /// Глобальное выравнивание, если в абзаце [textAlign] = null.
   final CustomTextAlign globalTextAlign;
-
-  /// Разрешаем ли переносы по мягкому переносу (\u00AD).
   final bool allowSoftHyphens;
-
-  /// Количество колонок на странице.
   final int columns;
-
-  /// Расстояние между колонками.
   final double columnSpacing;
-
-  /// Высота «страницы».
   final double pageHeight;
 
   AdvancedLayoutEngine({
@@ -52,69 +28,59 @@ class AdvancedLayoutEngine {
     required this.pageHeight,
   });
 
-  /// Выполнить полный layout, вернув многостраничную структуру.
   MultiColumnPagedLayout layoutAll() {
-    // 1) Сплошной список строк
-    final fullLayout = _layoutAllParagraphs();
-
-    // 2) Разбиваем на страницы / колонки
-    var multiPaged = _buildMultiColumnPages(fullLayout);
-
-    // 3) Применяем логику сирот/вдов (упрощённо).
-    multiPaged = _applyWidowOrphanControl(multiPaged, fullLayout);
-
-    return multiPaged;
+    final layout = _layoutAllParagraphs();
+    var multi = _buildMultiColumnPages(layout);
+    multi = _applyWidowOrphanControl(multi, layout);
+    return multi;
   }
 
-  /// Раскладываем все абзацы в «плоский» список строк.
+  /// Абзацы -> строки
   CustomTextLayout _layoutAllParagraphs() {
-    final lines = <LineLayout2>[];
+    final allLines = <LineLayout>[];
     final paragraphIndexOfLine = <int>[];
     double totalHeight = 0.0;
 
     for (int pIndex = 0; pIndex < paragraphs.length; pIndex++) {
       final para = paragraphs[pIndex];
-      final paraLines = _layoutSingleParagraph(para);
+      final lines = _layoutSingleParagraph(para);
 
-      // Запоминаем, к какому абзацу относятся эти строки
-      for (int i = 0; i < paraLines.length; i++) {
+      for (int i = 0; i < lines.length; i++) {
         paragraphIndexOfLine.add(pIndex);
       }
+      allLines.addAll(lines);
 
-      lines.addAll(paraLines);
-
-      // Считаем суммарную высоту (логическую)
-      double localHeight = 0.0;
-      for (int i = 0; i < paraLines.length; i++) {
-        localHeight += paraLines[i].height;
-        if (i < paraLines.length - 1) {
-          localHeight += lineSpacing;
+      // Подсчёт высоты
+      double paraHeight = 0.0;
+      for (int i = 0; i < lines.length; i++) {
+        paraHeight += lines[i].height;
+        if (i < lines.length - 1) {
+          paraHeight += lineSpacing;
         }
       }
-
-      totalHeight += localHeight;
-      // Отступ после абзаца
+      totalHeight += paraHeight;
       if (pIndex < paragraphs.length - 1) {
         totalHeight += para.paragraphSpacing;
       }
     }
 
     return CustomTextLayout(
-      lines: lines,
+      lines: allLines,
       totalHeight: totalHeight,
       paragraphIndexOfLine: paragraphIndexOfLine,
     );
   }
 
-  /// Раскладываем один абзац в строки.
-  List<LineLayout2> _layoutSingleParagraph(ParagraphBlock paragraph) {
-    final splitted = _splitBySpaces(paragraph.inlineElements);
+  /// Абзац -> строки
+  List<LineLayout> _layoutSingleParagraph(ParagraphBlock paragraph) {
+    // Главное – корректное разбиение на токены.
+    final splitted = _splitTokens(paragraph.inlineElements);
+
+    final result = <LineLayout>[];
+    var currentLine = LineLayout();
 
     bool isRTL = paragraph.textDirection == CustomTextDirection.rtl;
     double firstLineIndent = paragraph.firstLineIndent;
-
-    final result = <LineLayout2>[];
-    var currentLine = LineLayout2();
     double currentX = 0.0;
     double maxAscent = 0.0;
     double maxDescent = 0.0;
@@ -126,18 +92,16 @@ class AdvancedLayoutEngine {
       currentLine.height = maxAscent + maxDescent;
       result.add(currentLine);
 
-      currentLine = LineLayout2();
+      currentLine = LineLayout();
       currentX = 0.0;
       maxAscent = 0.0;
       maxDescent = 0.0;
-
-      // Со второй строки отступ не нужен
       firstLineIndent = 0.0;
     }
 
     for (final elem in splitted) {
-      // Блочная картинка => отдельная строка
       if (elem is ImageInlineElement && elem.mode == ImageDisplayMode.block) {
+        // Блочная картинка
         if (currentLine.elements.isNotEmpty) {
           commitLine();
         }
@@ -151,7 +115,6 @@ class AdvancedLayoutEngine {
       }
 
       double availableWidth = globalMaxWidth - currentX;
-      // Учет отступа первой строки
       if (!isRTL && currentLine.elements.isEmpty && firstLineIndent > 0) {
         currentX += firstLineIndent;
         availableWidth -= firstLineIndent;
@@ -161,19 +124,21 @@ class AdvancedLayoutEngine {
 
       elem.performLayout(availableWidth);
 
+      // Не влезает -> перенос
       if (currentX + elem.width > globalMaxWidth && currentLine.elements.isNotEmpty) {
-        // перенос
+        // Попытка разорвать по \u00AD
         if (elem is TextInlineElement && allowSoftHyphens) {
-          final splittedPair = _trySplitBySoftHyphen(elem, globalMaxWidth - currentX);
-          if (splittedPair != null) {
-            final leftPart = splittedPair[0];
-            final rightPart = splittedPair[1];
-            leftPart.performLayout(globalMaxWidth - currentX);
+          final splitted2 = _trySplitBySoftHyphen(elem, globalMaxWidth - currentX);
+          if (splitted2 != null) {
+            final leftPart = splitted2[0];
+            final rightPart = splitted2[1];
 
+            leftPart.performLayout(globalMaxWidth - currentX);
             currentLine.elements.add(leftPart);
             currentX += leftPart.width;
             maxAscent = math.max(maxAscent, leftPart.baseline);
             maxDescent = math.max(maxDescent, leftPart.height - leftPart.baseline);
+
             commitLine();
 
             rightPart.performLayout(globalMaxWidth);
@@ -198,6 +163,7 @@ class AdvancedLayoutEngine {
           maxDescent = math.max(maxDescent, elem.height - elem.baseline);
         }
       } else {
+        // помещается
         currentLine.elements.add(elem);
         currentX += elem.width;
         maxAscent = math.max(maxAscent, elem.baseline);
@@ -209,61 +175,51 @@ class AdvancedLayoutEngine {
       commitLine();
     }
 
-    // RTL => реверс элементов в каждой строке
+    // RTL -> разворот
     if (isRTL) {
       for (final line in result) {
-       reverseListInPlace( line.elements);
+        line.elements = line.elements.reversed.toList();
       }
     }
 
     return result;
   }
-  void reverseListInPlace<T>(List<T> list) {
-    for (int i = 0, j = list.length - 1; i < j; i++, j--) {
-      final temp = list[i];
-      list[i] = list[j];
-      list[j] = temp;
-    }
-  }
-  /// Разбиваем в итоге на страницы и колонки.
+
+  /// Шаг 2: строки -> страницы/колонки
   MultiColumnPagedLayout _buildMultiColumnPages(CustomTextLayout layout) {
     final lines = layout.lines;
     final pages = <MultiColumnPage>[];
 
-    final totalColumnSpacing = columnSpacing * (columns - 1);
-    final colWidth = (globalMaxWidth - totalColumnSpacing) / columns;
+    final totalColsSpacing = columnSpacing * (columns - 1);
+    final colWidth = (globalMaxWidth - totalColsSpacing) / columns;
 
-    int currentLineIndex = 0;
-    while (currentLineIndex < lines.length) {
-      final pageColumns = <List<LineLayout2>>[];
+    int currentIndex = 0;
+    while (currentIndex < lines.length) {
+      final pageColumns = <List<LineLayout>>[];
 
       for (int col = 0; col < columns; col++) {
-        final colLines = <LineLayout2>[];
+        final colLines = <LineLayout>[];
         double usedHeight = 0.0;
-
-        while (currentLineIndex < lines.length) {
-          final line = lines[currentLineIndex];
+        while (currentIndex < lines.length) {
+          final line = lines[currentIndex];
           final lineHeight = line.height;
           if (colLines.isEmpty) {
             colLines.add(line);
             usedHeight = lineHeight;
-            currentLineIndex++;
+            currentIndex++;
           } else {
             final needed = usedHeight + lineSpacing + lineHeight;
             if (needed <= pageHeight) {
               colLines.add(line);
               usedHeight = needed;
-              currentLineIndex++;
+              currentIndex++;
             } else {
               break;
             }
           }
         }
-
         pageColumns.add(colLines);
-        if (currentLineIndex >= lines.length) {
-          break;
-        }
+        if (currentIndex >= lines.length) break;
       }
 
       final page = MultiColumnPage(
@@ -275,52 +231,86 @@ class AdvancedLayoutEngine {
       );
       pages.add(page);
 
-      if (currentLineIndex >= lines.length) {
-        break;
-      }
+      if (currentIndex >= lines.length) break;
     }
 
     return MultiColumnPagedLayout(pages);
   }
 
-  /// Контроль сирот/вдов (упрощённо).
+  /// Шаг 3: сироты/вдовы – упрощённо
   MultiColumnPagedLayout _applyWidowOrphanControl(
-      MultiColumnPagedLayout multiPaged,
+      MultiColumnPagedLayout multi,
       CustomTextLayout layout,
       ) {
-    // В реальном решении нужно сложный откат и пересчёт.
-    // Здесь — лишь заглушка, которая возвращает без изменений.
-    return multiPaged;
+    // Пока не реализуем откат строк
+    return multi;
   }
 
-  /// Разбиваем элементы абзаца по пробелам и т.д., чтобы проще укладывать.
-  List<InlineElement> _splitBySpaces(List<InlineElement> elements) {
+  /// Собираем конечные токены (слова, пробелы, пунктуация),
+  /// причём для удобства добавим «пробел» автоматически в конец каждого токена, кроме уже явно пробела.
+  List<InlineElement> _splitTokens(List<InlineElement> elements) {
     final result = <InlineElement>[];
-    for (final e in elements) {
-      if (e is TextInlineElement) {
-        final tokens = e.text.split(RegExp(r'(\s+)'));
-        for (final token in tokens) {
-          if (token.isEmpty) continue;
-          result.add(TextInlineElement(token, e.style));
+
+    for (final elem in elements) {
+      if (elem is TextInlineElement) {
+        final splitted = _extractTokens(elem.text);
+        for (final tok in splitted) {
+          if (tok.isEmpty) continue;
+
+          // Если сам tok – это пробел или набор пробелов, добавляем как есть
+          // Иначе добавим "tok + " "
+          // Но, чтобы не было двойных пробелов после запятых,
+          // сделаем логику:
+          final isWhitespace = tok.trim().isEmpty;
+          if (isWhitespace) {
+            // Это чистый пробел
+            result.add(TextInlineElement(tok, elem.style));
+          } else {
+            // Это слово/пунктуация
+            // добавим пробел позади, чтобы гарантированно разделять со следующим токеном
+            result.add(TextInlineElement("$tok ", elem.style));
+          }
         }
-      } else if (e is InlineLinkElement) {
-        final tokens = e.text.split(RegExp(r'(\s+)'));
-        for (final token in tokens) {
-          if (token.isEmpty) continue;
-          result.add(InlineLinkElement(token, e.style, e.url));
+      } else if (elem is InlineLinkElement) {
+        final splitted = _extractTokens(elem.text);
+        for (final tok in splitted) {
+          if (tok.isEmpty) continue;
+
+          final isWhitespace = tok.trim().isEmpty;
+          if (isWhitespace) {
+            result.add(InlineLinkElement(tok, elem.style, elem.url));
+          } else {
+            result.add(InlineLinkElement("$tok ", elem.style, elem.url));
+          }
         }
       } else {
-        result.add(e);
+        // Изображения / etc
+        result.add(elem);
       }
     }
+
     return result;
   }
 
-  /// Пытаемся разорвать слово по \u00AD (soft hyphen).
-  List<TextInlineElement>? _trySplitBySoftHyphen(
-      TextInlineElement elem,
-      double remainingWidth,
-      ) {
+  /// Выделяем слова, пробелы, пунктуацию
+  /// 1) Вставляем пробелы вокруг пунктуации
+  /// 2) split (r'(\s+)')
+  List<String> _extractTokens(String text) {
+    // Вставим пробелы вокруг знаков препинания
+    final punctuationRegex = RegExp(r'([,.!?;:()\[\]{}…])');
+    final spaced = text.replaceAllMapped(punctuationRegex, (m) {
+      final p = m.group(1)!;
+      // ставим пробел до и после
+      return ' $p ';
+    });
+
+    // Разбиваем, включая пробелы
+    final tokens = spaced.split(RegExp(r'(\s+)'));
+    return tokens;
+  }
+
+  /// Мягкий перенос
+  List<TextInlineElement>? _trySplitBySoftHyphen(TextInlineElement elem, double remainingWidth) {
     final raw = elem.text;
     final positions = <int>[];
     for (int i = 0; i < raw.length; i++) {
@@ -330,7 +320,6 @@ class AdvancedLayoutEngine {
     }
     if (positions.isEmpty) return null;
 
-    // Перебираем с конца
     for (int i = positions.length - 1; i >= 0; i--) {
       final idx = positions[i];
       if (idx < raw.length - 1) {

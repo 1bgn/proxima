@@ -1,16 +1,14 @@
-// fb2_paginator.dart
+// paginator.dart
 import 'package:flutter/material.dart';
-import 'package:proxima_reader/feature/reader_screen/domain/utils/custom_text_engine/line_layout.dart';
-import 'dart:math' as math;
+import 'package:proxima_reader/feature/reader_screen/domain/utils/custom_text_engine/paragraph_block.dart';
+import 'custom_text_engine/advanced_text_widget.dart';
+import 'custom_text_engine/line_layout.dart';
 
-
-
-import 'custom_text_engine/paragraph_block.dart';
 import 'custom_text_engine/text_layout_engine.dart';
-import 'fb2_parser.dart'; // чтобы знать, что такое ChapterData
+import 'fb2_parser.dart';
 
-/// Класс, который собирает единый MultiColumnPagedLayout по всем главам,
-/// гарантируя, что каждая глава начинается с новой страницы.
+/// Класс, который формирует общий MultiColumnPagedLayout по всем главам,
+/// начиная каждую главу с новой страницы (по сути, «склейка» раскладок глав).
 class FB2Paginator {
   final double globalMaxWidth;
   final double lineSpacing;
@@ -30,13 +28,10 @@ class FB2Paginator {
     required this.pageHeight,
   });
 
-  /// Формирует единый многостраничный layout по всем главам.
   MultiColumnPagedLayout layoutAllChapters(List<ChapterData> chapters) {
     final allPages = <MultiColumnPage>[];
 
-    for (int i = 0; i < chapters.length; i++) {
-      final chapter = chapters[i];
-      // Вызываем движок для этой главы
+    for (final chapter in chapters) {
       final engine = AdvancedLayoutEngine(
         paragraphs: chapter.paragraphs,
         globalMaxWidth: globalMaxWidth,
@@ -48,14 +43,7 @@ class FB2Paginator {
         pageHeight: pageHeight,
       );
       final chapterLayout = engine.layoutAll();
-      final chapterPages = chapterLayout.pages;
-
-      if (chapterPages.isNotEmpty) {
-        // Если это не первая глава, то начинаем с новой страницы
-        // => просто дополняем список страниц,
-        // т.к. каждая layoutAll() сама начинает с pageIndex=0.
-        allPages.addAll(chapterPages);
-      }
+      allPages.addAll(chapterLayout.pages);
     }
 
     return MultiColumnPagedLayout(allPages);

@@ -1,6 +1,4 @@
-/// paragraph_block.dart
-///
-/// Описание абзаца и связанных с ним настроек.
+// lib/custom_text_engine/paragraph_block.dart
 
 import 'inline_elements.dart';
 
@@ -12,24 +10,23 @@ enum CustomTextAlign {
   justify,
 }
 
-/// Параграф (абзац).
+/// Абзац (параграф).
 class ParagraphBlock {
-  /// Набор инлайновых элементов (текст, ссылки, изображения).
   final List<InlineElement> inlineElements;
 
-  /// Если null, используем глобальное выравнивание движка.
+  /// Если [textAlign] = null, используем глобальное выравнивание движка.
   final CustomTextAlign? textAlign;
 
-  /// Направление текста.
+  /// Направление (RTL или LTR).
   final CustomTextDirection textDirection;
 
-  /// Отступ (в пикселях) у первой строки.
+  /// Отступ первой строки (в пикселях).
   final double firstLineIndent;
 
-  /// Отступ (в пикселях) после абзаца.
+  /// Отступ после абзаца.
   final double paragraphSpacing;
 
-  /// Минимальное число строк в абзаце (учёт сирот/вдов).
+  /// Минимальное число строк в абзаце (для сирот/вдов).
   final int minimumLines;
 
   ParagraphBlock({
