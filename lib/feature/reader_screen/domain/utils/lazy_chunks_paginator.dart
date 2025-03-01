@@ -35,7 +35,7 @@ class LazyChunksPaginator {
     required this.columns,
     required this.columnSpacing,
     required this.allowSoftHyphens,
-    int lruCapacity = 5,
+    int lruCapacity = 3,
   })  : _paragraphsCache = LruCache<int, List<ParagraphBlock>>(lruCapacity),
         _layoutCache = LruCache<int, CustomTextLayout>(lruCapacity),
         _offsetsCache = LruCache<int, List<int>>(lruCapacity);
@@ -96,6 +96,7 @@ class LazyChunksPaginator {
     return offs.length;
   }
 
+  /// Изменённый метод _ensureOffsets принимает также paragraphIndexOfLine.
   Future<List<int>> _ensureOffsets(int cIndex) async {
     List<ParagraphBlock>? paras = _paragraphsCache.get(cIndex);
     if (paras == null) {
@@ -119,13 +120,15 @@ class LazyChunksPaginator {
     }
     List<int>? offs = _offsetsCache.get(cIndex);
     if (offs == null) {
-      offs = _buildOffsets(layout.lines);
+      // Используем обновлённую версию _buildOffsets, которая учитывает startNewPage
+      offs = _buildOffsets(layout.lines, layout.paragraphIndexOfLine, paras);
       _offsetsCache.put(cIndex, offs);
     }
     return offs;
   }
 
-  List<int> _buildOffsets(List<LineLayout> lines) {
+  /// Метод построения оффсетов с учетом свойства startNewPage в ParagraphBlock.
+  List<int> _buildOffsets(List<LineLayout> lines, List<int> paragraphIndexOfLine, List<ParagraphBlock> paras) {
     final result = <int>[];
     if (lines.isEmpty) {
       result.add(0);
@@ -135,6 +138,17 @@ class LazyChunksPaginator {
     double used = 0;
     result.add(0);
     for (int i = 0; i < lines.length; i++) {
+      // Если текущая строка принадлежит параграфу, помеченному как начало новой страницы,
+      // форсируем разрыв страницы.
+      final paraIndex = paragraphIndexOfLine[i];
+      if (paras[paraIndex].startNewPage) {
+        if (i != 0) {
+          curLine = i;
+          result.add(curLine);
+          used = lines[i].height;
+          continue;
+        }
+      }
       final lh = lines[i].height;
       if (i == curLine) {
         used = lh;

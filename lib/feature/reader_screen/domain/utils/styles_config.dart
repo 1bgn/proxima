@@ -41,39 +41,16 @@ class TagStyleConfig {
 /// Класс, в котором вы храните стили для разных тегов.
 class StylesConfig {
   final Map<String, TagStyleConfig> _map;
-  static const TextStyle baseText = TextStyle(
-    fontSize: 16,
-    color: Colors.black,
-  );
-
-  static const TextStyle boldHeader = TextStyle(
-    fontSize: 20,
-    color: Colors.black,
-    fontWeight: FontWeight.bold,
-  );
-
-  static const TextStyle epigraph = TextStyle(
-    fontSize: 16,
-    color: Colors.black87,
-    fontStyle: FontStyle.italic,
-  );
-
-  static const TextStyle annotation = TextStyle(
-    fontSize: 14,
-    color: Colors.grey,
-    fontStyle: FontStyle.italic,
-  );
-
-  static const TextStyle subtitle = TextStyle(
-    fontSize: 18,
-    color: Colors.black87,
-    fontWeight: FontWeight.w500,
-  );
-
-  static const TextStyle textAuthor = TextStyle(
-    fontSize: 14,
-    color: Colors.grey,
-  );
+  static const TextStyle baseText = TextStyle(fontSize: 16, color: Colors.black);
+  static const TextStyle boldHeader = TextStyle(fontSize: 20, color: Colors.black, fontWeight: FontWeight.bold);
+  static const TextStyle titleFont = TextStyle(fontSize: 24, color: Colors.black, fontWeight: FontWeight.bold);
+  static const TextStyle subtitle = TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.w500);
+  static const TextStyle subtitleFont = TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.w500);
+  static const TextStyle epigraph = TextStyle(fontSize: 14, color: Colors.black87, fontStyle: FontStyle.italic);
+  static const TextStyle annotation = TextStyle(fontSize: 14, color: Colors.grey, fontStyle: FontStyle.italic);
+  static const TextStyle coverImageStyle = TextStyle(fontSize: 14, color: Colors.grey, fontStyle: FontStyle.italic);
+  static const TextStyle textAuthor = TextStyle(fontSize: 14, color: Colors.grey);
+  static const TextStyle authorFont = TextStyle(fontSize: 14, color: Colors.grey);
   StylesConfig(this._map);
 
   /// Если нет стиля для данного тега, вернём дефолт.

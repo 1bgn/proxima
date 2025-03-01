@@ -12,13 +12,21 @@ import 'custom_text_engine/paragraph_block.dart';
 import 'hyphenator.dart';
 import 'styles_config.dart';
 
+/// Класс для загрузки и парсинга FB2‑файла из ассетов.
+/// Элементы добавляются в порядке их следования в документе,
+/// а теги <section> обрабатываются так, что перед их содержимым
+/// вставляется специальный блок с startNewPage: true.
 class AssetFB2Loader {
   final String assetPath;
   final Hyphenator hyphenator;
 
   bool _initialized = false;
   String? _fb2content;
+
+  /// Итоговый список ParagraphBlock в порядке следования.
   final List<ParagraphBlock> _allParagraphs = [];
+
+  /// Кэш для изображений: id -> Future<ui.Image>
   final Map<String, Future<ui.Image>> _imageCache = {};
 
   AssetFB2Loader({
@@ -29,16 +37,19 @@ class AssetFB2Loader {
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
+
+    // Загружаем FB2-файл из ассетов.
     _fb2content = await rootBundle.loadString(assetPath);
     final doc = XmlDocument.parse(_fb2content!);
+
+    // Парсинг бинарных данных – изображения.
     _parseBinaries(doc);
-    final titleInfo = doc.findAllElements('title-info').isNotEmpty
-        ? doc.findAllElements('title-info').first
-        : null;
-    if (titleInfo != null) {
-      _processTitleInfo(titleInfo);
+
+    // Рекурсивно обходим все <body> элементы.
+    final bodies = doc.findAllElements('body');
+    for (final body in bodies) {
+      _parseBody(body);
     }
-    _parseAllParagraphs(doc);
   }
 
   int countParagraphs() => _allParagraphs.length;
@@ -75,221 +86,216 @@ class AssetFB2Loader {
     return completer.future;
   }
 
-  void _processTitleInfo(XmlElement titleInfo) {
-    final bookTitles = titleInfo.findElements('book-title');
-    for (final bt in bookTitles) {
-      final pb = _parseParagraph(bt, style: StylesConfig.boldHeader);
-      if (pb != null) _allParagraphs.add(pb);
-    }
-    final subtitles = titleInfo.findElements('subtitle');
-    for (final st in subtitles) {
-      final pb = _parseParagraph(st, style: StylesConfig.subtitle);
-      if (pb != null) _allParagraphs.add(pb);
-    }
-    final textAuthors = titleInfo.findElements('text-author');
-    if (textAuthors.isNotEmpty) {
-      for (final ta in textAuthors) {
-        final pb = _parseParagraph(ta, style: StylesConfig.textAuthor);
-        if (pb != null) _allParagraphs.add(pb);
-      }
-    } else {
-      final authors = titleInfo.findElements('author');
-      for (final author in authors) {
-        final name = author.text.trim();
-        if (name.isNotEmpty) {
+  /// Рекурсивный обход XML-узлов внутри элемента.
+  /// Если встречается <section>, вставляется маркер начала новой страницы,
+  /// затем содержимое секции обрабатывается.
+  void _parseBody(XmlElement elem) {
+    for (final node in elem.children) {
+      if (node is XmlText && node.text.trim().isEmpty) continue;
+      if (node is XmlComment) continue;
+
+      if (node is XmlElement) {
+        final localName = node.name.local.toLowerCase();
+        if (localName == 'section') {
+          // Вставляем маркер нового раздела – начало новой страницы.
           _allParagraphs.add(ParagraphBlock(
-            inlineElements: [TextInlineElement(name, StylesConfig.textAuthor)],
+            inlineElements: [],
             textAlign: null,
             textDirection: CustomTextDirection.ltr,
             firstLineIndent: 0,
-            paragraphSpacing: 10,
-            minimumLines: 1,
+            paragraphSpacing: 0,
+            minimumLines: 0,
+            startNewPage: true,
+          ));
+          // Обрабатываем содержимое секции.
+          _parseBody(node);
+        } else if (_isBlockElement(localName)) {
+          final pb = _parseBlock(node);
+          if (pb != null) _allParagraphs.add(pb);
+        } else {
+          _parseBody(node);
+        }
+      }
+    }
+  }
+
+  bool _isBlockElement(String localName) {
+    return localName == 'p' ||
+        localName == 'empty-line' ||
+        localName == 'image' ||
+        localName == 'coverpage' ||
+        localName == 'annotation' ||
+        localName == 'epigraph' ||
+        localName == 'poem' ||
+        localName == 'title' ||
+        localName == 'subtitle' ||
+        localName == 'text-author';
+  }
+
+  ParagraphBlock? _parseBlock(XmlElement elem) {
+    final localName = elem.name.local.toLowerCase();
+    if (localName == 'empty-line') {
+      return ParagraphBlock(
+        inlineElements: [TextInlineElement("\n", StylesConfig.baseText)],
+        textAlign: null,
+        textDirection: CustomTextDirection.ltr,
+        firstLineIndent: 0,
+        paragraphSpacing: 10,
+        minimumLines: 1,
+      );
+    } else if (localName == 'coverpage') {
+      for (final imageElem in elem.findElements('image')) {
+        final pb = _parseParagraph(imageElem, style: StylesConfig.coverImageStyle);
+        if (pb != null) return pb;
+      }
+      return null;
+    } else if (localName == 'annotation' ||
+        localName == 'epigraph' ||
+        localName == 'poem' ||
+        localName == 'text-author') {
+      return _parseParagraph(elem, style: StylesConfig.baseText);
+    } else if (localName == 'title') {
+      final pElems = elem.findElements('p');
+      List<ParagraphBlock> blocks = [];
+      for (final p in pElems) {
+        final pb = _parseParagraph(p, style: StylesConfig.titleFont);
+        if (pb != null) {
+          blocks.add(pb.copyWith(textAlign: CustomTextAlign.center, firstLineIndent: 0));
+        }
+      }
+      if (blocks.isNotEmpty) {
+        final combinedInlines = <InlineElement>[];
+        for (var i = 0; i < blocks.length; i++) {
+          combinedInlines.addAll(blocks[i].inlineElements);
+          if (i < blocks.length - 1) {
+            combinedInlines.add(TextInlineElement("\n", StylesConfig.titleFont));
+          }
+        }
+        return ParagraphBlock(
+          inlineElements: combinedInlines,
+          textAlign: CustomTextAlign.center,
+          textDirection: CustomTextDirection.ltr,
+          firstLineIndent: 0,
+          paragraphSpacing: 10,
+          minimumLines: 1,
+          maxWidth: null,
+        );
+      }
+      return null;
+    } else if (localName == 'subtitle') {
+      final pElems = elem.findElements('p');
+      List<ParagraphBlock> blocks = [];
+      for (final p in pElems) {
+        final pb = _parseParagraph(p, style: StylesConfig.subtitleFont);
+        if (pb != null) {
+          blocks.add(pb.copyWith(textAlign: CustomTextAlign.center, firstLineIndent: 0));
+        }
+      }
+      if (blocks.isNotEmpty) {
+        final combinedInlines = <InlineElement>[];
+        for (var i = 0; i < blocks.length; i++) {
+          combinedInlines.addAll(blocks[i].inlineElements);
+          if (i < blocks.length - 1) {
+            combinedInlines.add(TextInlineElement("\n", StylesConfig.subtitleFont));
+          }
+        }
+        return ParagraphBlock(
+          inlineElements: combinedInlines,
+          textAlign: CustomTextAlign.center,
+          textDirection: CustomTextDirection.ltr,
+          firstLineIndent: 0,
+          paragraphSpacing: 10,
+          minimumLines: 1,
+          maxWidth: null,
+        );
+      }
+      return null;
+    } else if (localName == 'p') {
+      return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
+        textAlign: CustomTextAlign.left,
+        firstLineIndent: 20,
+      );
+    } else if (localName == 'image') {
+      return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
+        textAlign: CustomTextAlign.center,
+        firstLineIndent: 0,
+      );
+    } else {
+      return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
+        textAlign: CustomTextAlign.left,
+        firstLineIndent: 0,
+      );
+    }
+  }
+
+  ParagraphBlock? _parseParagraph(XmlElement elem, {TextStyle? style, double? forcedMaxWidth}) {
+    final inlines = <InlineElement>[];
+    final baseStyle = style ?? StylesConfig.baseText;
+
+    if (elem.name.local.toLowerCase() == 'image' && elem.children.isEmpty) {
+      final href = elem.getAttribute('l:href')
+          ?? elem.getAttribute('xlink:href')
+          ?? elem.getAttribute('href');
+      if (href != null && href.startsWith('#')) {
+        final id = href.substring(1);
+        if (_imageCache.containsKey(id)) {
+          final fut = _imageCache[id]!;
+          inlines.add(ImageFutureInlineElement(
+            future: fut,
+            desiredWidth: null,
+            desiredHeight: null,
+            minHeight: 100,
           ));
         }
       }
-    }
-  }
-
-  void _parseAllParagraphs(XmlDocument doc) {
-    final body = doc.descendants.whereType<XmlElement>().firstWhere(
-          (e) => e.name.local.toLowerCase() == 'body',
-      orElse: () => XmlElement(XmlName('body')),
-    );
-    if (body.children.isEmpty) return;
-    for (final tag in ['annotation', 'epigraph']) {
-      final elems = body.descendants.whereType<XmlElement>()
-          .where((e) => e.name.local.toLowerCase() == tag);
-      for (final elem in elems) {
-        _processSectionLike(elem, tag);
-      }
-    }
-    final poems = body.descendants.whereType<XmlElement>()
-        .where((e) => e.name.local.toLowerCase() == 'poem');
-    for (final poem in poems) {
-      _processPoem(poem);
-    }
-    final pElems = body.descendants.whereType<XmlElement>()
-        .where((e) => e.name.local.toLowerCase() == 'p' &&
-        !e.ancestors.any((a) {
-          if (a is XmlElement) {
-            final lname = a.name.local.toLowerCase();
-            return ['annotation', 'epigraph', 'poem', 'stanza', 'title', 'subtitle', 'text-author'].contains(lname);
-          }
-          return false;
-        }))
-        .toList();
-    for (final p in pElems) {
-      final pb = _parseParagraph(p, style: StylesConfig.baseText);
-      if (pb != null) _allParagraphs.add(pb);
-    }
-  }
-
-  void _processSectionLike(XmlElement elem, String tag) {
-    TextStyle style;
-    CustomTextAlign align = CustomTextAlign.left;
-    if (tag == 'annotation') {
-      style = StylesConfig.annotation;
-    } else if (tag == 'epigraph') {
-      style = StylesConfig.epigraph;
-      align = CustomTextAlign.right;
     } else {
-      style = StylesConfig.baseText;
-    }
-    final pElems = elem.descendants.whereType<XmlElement>()
-        .where((e) => e.name.local.toLowerCase() == 'p');
-    for (final p in pElems) {
-      final pb = _parseParagraph(p, style: style);
-      if (pb != null) {
-        // Для эпиграфа ограничиваем ширину до 2/3 от глобальной ширины
-        final styledPb = ParagraphBlock(
-          inlineElements: pb.inlineElements,
-          textAlign: align,
-          textDirection: pb.textDirection,
-          firstLineIndent: pb.firstLineIndent,
-          paragraphSpacing: pb.paragraphSpacing,
-          minimumLines: pb.minimumLines,
-          maxWidth: tag == 'epigraph' ? 0.66 : null,
-        );
-        _allParagraphs.add(styledPb);
-      }
-    }
-  }
-
-  void _processPoem(XmlElement poemElem) {
-    final titleElems = poemElem.descendants.whereType<XmlElement>()
-        .where((e) => e.name.local.toLowerCase() == 'title');
-    for (final title in titleElems) {
-      final pElems = title.descendants.whereType<XmlElement>()
-          .where((e) => e.name.local.toLowerCase() == 'p');
-      for (final p in pElems) {
-        final pb = _parseParagraph(p, style: StylesConfig.boldHeader);
-        if (pb != null) _allParagraphs.add(pb);
-      }
-    }
-    final subtitleElems = poemElem.descendants.whereType<XmlElement>()
-        .where((e) => e.name.local.toLowerCase() == 'subtitle');
-    for (final sub in subtitleElems) {
-      final pb = _parseParagraph(sub, style: StylesConfig.subtitle);
-      if (pb != null) _allParagraphs.add(pb);
-    }
-    final stanzaElems = poemElem.descendants.whereType<XmlElement>()
-        .where((e) => e.name.local.toLowerCase() == 'stanza');
-    for (final stanza in stanzaElems) {
-      final pElems = stanza.descendants.whereType<XmlElement>()
-          .where((e) => e.name.local.toLowerCase() == 'p');
-      for (final p in pElems) {
-        final pb = _parseParagraph(p, style: StylesConfig.epigraph);
-        if (pb != null) {
-          final styledPb = ParagraphBlock(
-            inlineElements: pb.inlineElements,
-            textAlign: CustomTextAlign.right,
-            textDirection: pb.textDirection,
-            firstLineIndent: pb.firstLineIndent,
-            paragraphSpacing: pb.paragraphSpacing,
-            minimumLines: pb.minimumLines,
-            maxWidth: 0.66,
-          );
-          _allParagraphs.add(styledPb);
-        }
-      }
-    }
-  }
-
-  ParagraphBlock? _parseParagraph(XmlElement elem, {TextStyle? style}) {
-    final inlines = <InlineElement>[];
-    final baseStyle = style ?? StylesConfig.baseText;
-    void visit(XmlNode node, TextStyle currentStyle) {
-      if (node is XmlText) {
-        final raw = node.text.replaceAll(RegExp(r'\s+'), ' ');
-        if (raw.isNotEmpty) {
-          final hy = hyphenator.hyphenate(raw);
-          inlines.add(TextInlineElement(hy, currentStyle));
-        }
-      } else if (node is XmlElement) {
-        final tag = node.name.local.toLowerCase();
-        if (tag == 'b' || tag == 'strong') {
-          final newStyle = currentStyle.copyWith(fontWeight: FontWeight.bold);
-          node.children.forEach((child) => visit(child, newStyle));
-        } else if (tag == 'i' || tag == 'em' || tag == 'emphasis') {
-          final newStyle = currentStyle.copyWith(fontStyle: FontStyle.italic);
-          node.children.forEach((child) => visit(child, newStyle));
-        } else if (tag == 'link') {
-          final linkUrl = node.getAttribute('l:href') ?? node.getAttribute('href') ?? '';
-          String accumulated = '';
-          final List<InlineElement> linkElems = [];
-          void visitLink(XmlNode n, TextStyle s) {
-            if (n is XmlText) {
-              final txt = n.text.replaceAll(RegExp(r'\s+'), ' ');
-              if (txt.isNotEmpty) {
-                accumulated += txt;
-                linkElems.add(TextInlineElement(txt, s));
-              }
-            } else if (n is XmlElement) {
-              final t = n.name.local.toLowerCase();
-              if (t == 'b' || t == 'strong') {
-                final s2 = s.copyWith(fontWeight: FontWeight.bold);
-                n.children.forEach((child) => visitLink(child, s2));
-              } else if (t == 'i' || t == 'em' || t == 'emphasis') {
-                final s2 = s.copyWith(fontStyle: FontStyle.italic);
-                n.children.forEach((child) => visitLink(child, s2));
-              } else {
-                n.children.forEach((child) => visitLink(child, s));
+      void visit(XmlNode node, TextStyle currentStyle) {
+        if (node is XmlText) {
+          final raw = node.text.replaceAll(RegExp(r'\s+'), ' ');
+          if (raw.isNotEmpty) {
+            final hy = hyphenator.hyphenate(raw);
+            inlines.add(TextInlineElement(hy, currentStyle));
+          }
+        } else if (node is XmlElement) {
+          final tag = node.name.local.toLowerCase();
+          if (tag == 'b' || tag == 'strong') {
+            final newStyle = currentStyle.copyWith(fontWeight: FontWeight.bold);
+            for (final child in node.children) {
+              visit(child, newStyle);
+            }
+          } else if (tag == 'i' || tag == 'em' || tag == 'emphasis') {
+            final newStyle = currentStyle.copyWith(fontStyle: FontStyle.italic);
+            for (final child in node.children) {
+              visit(child, newStyle);
+            }
+          } else if (tag == 'image') {
+            final href = node.getAttribute('l:href')
+                ?? node.getAttribute('xlink:href')
+                ?? node.getAttribute('href');
+            if (href != null && href.startsWith('#')) {
+              final id = href.substring(1);
+              if (_imageCache.containsKey(id)) {
+                final fut = _imageCache[id]!;
+                inlines.add(ImageFutureInlineElement(
+                  future: fut,
+                  desiredWidth: null,
+                  desiredHeight: null,
+                  minHeight: 100,
+                ));
               }
             }
-          }
-          node.children.forEach((child) => visitLink(child, currentStyle));
-          if (accumulated.isNotEmpty) {
-            linkElems.insert(0, TextInlineElement(accumulated, currentStyle));
-            inlines.add(InlineLinkElement(accumulated, currentStyle, linkUrl));
-          }
-        } else if (tag == 'image') {
-          final href = node.getAttribute('l:href') ?? node.getAttribute('href');
-          if (href != null && href.startsWith('#')) {
-            final id = href.substring(1);
-            if (_imageCache.containsKey(id)) {
-              final fut = _imageCache[id]!;
-              inlines.add(ImageFutureInlineElement(
-                future: fut,
-                desiredWidth: null,
-                desiredHeight: null,
-                minHeight: 100,
-              ));
-            }
-          }
-        } else if (tag == 'subtitle' || tag == 'text-author') {
-          TextStyle newStyle;
-          if (tag == 'subtitle') {
-            newStyle = StylesConfig.subtitle;
           } else {
-            newStyle = StylesConfig.textAuthor;
+            for (final child in node.children) {
+              visit(child, currentStyle);
+            }
           }
-          node.children.forEach((child) => visit(child, newStyle));
-        } else {
-          node.children.forEach((child) => visit(child, currentStyle));
         }
       }
+      for (final child in elem.children) {
+        visit(child, baseStyle);
+      }
     }
-    elem.children.forEach((child) => visit(child, baseStyle));
+
     if (inlines.isEmpty) return null;
     return ParagraphBlock(
       inlineElements: inlines,
@@ -298,6 +304,7 @@ class AssetFB2Loader {
       firstLineIndent: 0,
       paragraphSpacing: 10,
       minimumLines: 1,
+      maxWidth: forcedMaxWidth,
     );
   }
 }

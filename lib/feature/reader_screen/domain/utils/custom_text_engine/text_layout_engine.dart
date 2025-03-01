@@ -1,6 +1,8 @@
-// lib/custom_text_engine/text_layout_engine.dart
+// text_layout_engine.dart
 //
-// Раскладывает абзацы в строки, обрабатывает пробелы, пунктуацию и мягкие переносы.
+// Промышленная реализация движка AdvancedLayoutEngine,
+// поддерживающая ParagraphBlock.maxWidth и сохраняющая пробелы между словами.
+// Если paragraph.maxWidth != null, то effectiveWidth = globalMaxWidth * paragraph.maxWidth.
 
 import 'dart:math' as math;
 import 'inline_elements.dart';
@@ -28,14 +30,18 @@ class AdvancedLayoutEngine {
     required this.pageHeight,
   });
 
+  /// Выполняет полный layout и возвращает многостраничную раскладку (MultiColumnPagedLayout).
   MultiColumnPagedLayout layoutAll() {
+    // 1. Разбиваем абзацы в строки
     final layout = _layoutAllParagraphs();
+    // 2. Разбиваем строки на страницы/колонки
     var multi = _buildMultiColumnPages(layout);
+    // 3. Простая (заглушка) логика сирот/вдов
     multi = _applyWidowOrphanControl(multi, layout);
     return multi;
   }
 
-  /// Абзацы -> строки
+  /// Шаг 1: Разбивает все абзацы в один список строк (LineLayout).
   CustomTextLayout _layoutAllParagraphs() {
     final allLines = <LineLayout>[];
     final paragraphIndexOfLine = <int>[];
@@ -45,12 +51,13 @@ class AdvancedLayoutEngine {
       final para = paragraphs[pIndex];
       final lines = _layoutSingleParagraph(para);
 
+      // Запоминаем, к какому абзацу относятся эти строки
       for (int i = 0; i < lines.length; i++) {
         paragraphIndexOfLine.add(pIndex);
       }
       allLines.addAll(lines);
 
-      // Подсчёт высоты
+      // Подсчёт виртуальной высоты абзаца (с учётом lineSpacing)
       double paraHeight = 0.0;
       for (int i = 0; i < lines.length; i++) {
         paraHeight += lines[i].height;
@@ -71,15 +78,18 @@ class AdvancedLayoutEngine {
     );
   }
 
-  /// Абзац -> строки
+  /// Шаг 1.1: Разбивает один абзац на строки, учитывая paragraph.maxWidth.
   List<LineLayout> _layoutSingleParagraph(ParagraphBlock paragraph) {
-    // Главное – корректное разбиение на токены.
-    final splitted = _splitTokens(paragraph.inlineElements);
+    // Если maxWidth не задан, используем globalMaxWidth.
+    final effectiveWidth = paragraph.maxWidth != null
+        ? globalMaxWidth * paragraph.maxWidth!
+        : globalMaxWidth;
 
+    final splitted = _splitTokens(paragraph.inlineElements);
     final result = <LineLayout>[];
     var currentLine = LineLayout();
 
-    bool isRTL = paragraph.textDirection == CustomTextDirection.rtl;
+    final isRTL = paragraph.textDirection == CustomTextDirection.rtl;
     double firstLineIndent = paragraph.firstLineIndent;
     double currentX = 0.0;
     double maxAscent = 0.0;
@@ -99,13 +109,14 @@ class AdvancedLayoutEngine {
       firstLineIndent = 0.0;
     }
 
+    // Проходимся по токенам (inline-элементам).
     for (final elem in splitted) {
+      // Если блочное изображение, переносим на отдельную строку.
       if (elem is ImageInlineElement && elem.mode == ImageDisplayMode.block) {
-        // Блочная картинка
         if (currentLine.elements.isNotEmpty) {
           commitLine();
         }
-        elem.performLayout(globalMaxWidth);
+        elem.performLayout(effectiveWidth);
         currentLine.elements.add(elem);
         currentX = elem.width;
         maxAscent = math.max(maxAscent, elem.baseline);
@@ -114,7 +125,7 @@ class AdvancedLayoutEngine {
         continue;
       }
 
-      double availableWidth = globalMaxWidth - currentX;
+      double availableWidth = effectiveWidth - currentX;
       if (!isRTL && currentLine.elements.isEmpty && firstLineIndent > 0) {
         currentX += firstLineIndent;
         availableWidth -= firstLineIndent;
@@ -124,31 +135,31 @@ class AdvancedLayoutEngine {
 
       elem.performLayout(availableWidth);
 
-      // Не влезает -> перенос
-      if (currentX + elem.width > globalMaxWidth && currentLine.elements.isNotEmpty) {
-        // Попытка разорвать по \u00AD
+      // Если не помещается
+      if (currentX + elem.width > effectiveWidth && currentLine.elements.isNotEmpty) {
+        // Пытаемся выполнить мягкий перенос (\u00AD)
         if (elem is TextInlineElement && allowSoftHyphens) {
-          final splitted2 = _trySplitBySoftHyphen(elem, globalMaxWidth - currentX);
-          if (splitted2 != null) {
-            final leftPart = splitted2[0];
-            final rightPart = splitted2[1];
+          final splittedPair = _trySplitBySoftHyphen(elem, effectiveWidth - currentX);
+          if (splittedPair != null) {
+            final leftPart = splittedPair[0];
+            final rightPart = splittedPair[1];
 
-            leftPart.performLayout(globalMaxWidth - currentX);
+            leftPart.performLayout(effectiveWidth - currentX);
             currentLine.elements.add(leftPart);
             currentX += leftPart.width;
             maxAscent = math.max(maxAscent, leftPart.baseline);
             maxDescent = math.max(maxDescent, leftPart.height - leftPart.baseline);
-
             commitLine();
 
-            rightPart.performLayout(globalMaxWidth);
+            rightPart.performLayout(effectiveWidth);
             currentLine.elements.add(rightPart);
             currentX = rightPart.width;
             maxAscent = math.max(maxAscent, rightPart.baseline);
             maxDescent = math.max(maxDescent, rightPart.height - rightPart.baseline);
           } else {
+            // Целиком переносим на новую строку
             commitLine();
-            elem.performLayout(globalMaxWidth);
+            elem.performLayout(effectiveWidth);
             currentLine.elements.add(elem);
             currentX = elem.width;
             maxAscent = math.max(maxAscent, elem.baseline);
@@ -156,14 +167,14 @@ class AdvancedLayoutEngine {
           }
         } else {
           commitLine();
-          elem.performLayout(globalMaxWidth);
+          elem.performLayout(effectiveWidth);
           currentLine.elements.add(elem);
           currentX = elem.width;
           maxAscent = math.max(maxAscent, elem.baseline);
           maxDescent = math.max(maxDescent, elem.height - elem.baseline);
         }
       } else {
-        // помещается
+        // Помещается в текущую строку
         currentLine.elements.add(elem);
         currentX += elem.width;
         maxAscent = math.max(maxAscent, elem.baseline);
@@ -175,17 +186,15 @@ class AdvancedLayoutEngine {
       commitLine();
     }
 
-    // RTL -> разворот
     if (isRTL) {
       for (final line in result) {
         line.elements = line.elements.reversed.toList();
       }
     }
-
     return result;
   }
 
-  /// Шаг 2: строки -> страницы/колонки
+  /// Шаг 2: Разбивает строки на многостраничную/многоколоночную структуру.
   MultiColumnPagedLayout _buildMultiColumnPages(CustomTextLayout layout) {
     final lines = layout.lines;
     final pages = <MultiColumnPage>[];
@@ -200,6 +209,7 @@ class AdvancedLayoutEngine {
       for (int col = 0; col < columns; col++) {
         final colLines = <LineLayout>[];
         double usedHeight = 0.0;
+
         while (currentIndex < lines.length) {
           final line = lines[currentIndex];
           final lineHeight = line.height;
@@ -231,85 +241,65 @@ class AdvancedLayoutEngine {
       );
       pages.add(page);
 
-      if (currentIndex >= lines.length) break;
+      if (currentIndex >= lines.length) {
+        break;
+      }
     }
 
     return MultiColumnPagedLayout(pages);
   }
 
-  /// Шаг 3: сироты/вдовы – упрощённо
+  /// Шаг 3: Контроль сирот/вдов (заглушка).
   MultiColumnPagedLayout _applyWidowOrphanControl(
       MultiColumnPagedLayout multi,
       CustomTextLayout layout,
       ) {
-    // Пока не реализуем откат строк
+    // В реальном решении требуется более сложная логика пересчёта строк,
+    // здесь лишь оставлен пример (заглушка).
     return multi;
   }
 
-  /// Собираем конечные токены (слова, пробелы, пунктуация),
-  /// причём для удобства добавим «пробел» автоматически в конец каждого токена, кроме уже явно пробела.
+  /// Разбивает inline-элементы на токены, **сохраняя пробелы**.
+  /// Для слов добавляем дополнительный пробел в конце ("$token "),
+  /// чтобы между словами в итоге оставался визуальный зазор.
   List<InlineElement> _splitTokens(List<InlineElement> elements) {
     final result = <InlineElement>[];
 
-    for (final elem in elements) {
-      if (elem is TextInlineElement) {
-        final splitted = _extractTokens(elem.text);
-        for (final tok in splitted) {
-          if (tok.isEmpty) continue;
-
-          // Если сам tok – это пробел или набор пробелов, добавляем как есть
-          // Иначе добавим "tok + " "
-          // Но, чтобы не было двойных пробелов после запятых,
-          // сделаем логику:
-          final isWhitespace = tok.trim().isEmpty;
+    for (final e in elements) {
+      if (e is TextInlineElement) {
+        final tokens = e.text.split(RegExp(r'(\s+)'));
+        for (final token in tokens) {
+          if (token.isEmpty) continue;
+          final isWhitespace = token.trim().isEmpty;
           if (isWhitespace) {
-            // Это чистый пробел
-            result.add(TextInlineElement(tok, elem.style));
+            // Сохраняем пробельный токен как есть
+            result.add(TextInlineElement(token, e.style));
           } else {
-            // Это слово/пунктуация
-            // добавим пробел позади, чтобы гарантированно разделять со следующим токеном
-            result.add(TextInlineElement("$tok ", elem.style));
+            // Добавляем слово с дополнительным пробелом
+            result.add(TextInlineElement("$token ", e.style));
           }
         }
-      } else if (elem is InlineLinkElement) {
-        final splitted = _extractTokens(elem.text);
-        for (final tok in splitted) {
-          if (tok.isEmpty) continue;
-
-          final isWhitespace = tok.trim().isEmpty;
+      } else if (e is InlineLinkElement) {
+        final tokens = e.text.split(RegExp(r'(\s+)'));
+        for (final token in tokens) {
+          if (token.isEmpty) continue;
+          final isWhitespace = token.trim().isEmpty;
           if (isWhitespace) {
-            result.add(InlineLinkElement(tok, elem.style, elem.url));
+            result.add(InlineLinkElement(token, e.style, e.url));
           } else {
-            result.add(InlineLinkElement("$tok ", elem.style, elem.url));
+            result.add(InlineLinkElement("$token ", e.style, e.url));
           }
         }
       } else {
-        // Изображения / etc
-        result.add(elem);
+        // Изображения и т.д.
+        result.add(e);
       }
     }
 
     return result;
   }
 
-  /// Выделяем слова, пробелы, пунктуацию
-  /// 1) Вставляем пробелы вокруг пунктуации
-  /// 2) split (r'(\s+)')
-  List<String> _extractTokens(String text) {
-    // Вставим пробелы вокруг знаков препинания
-    final punctuationRegex = RegExp(r'([,.!?;:()\[\]{}…])');
-    final spaced = text.replaceAllMapped(punctuationRegex, (m) {
-      final p = m.group(1)!;
-      // ставим пробел до и после
-      return ' $p ';
-    });
-
-    // Разбиваем, включая пробелы
-    final tokens = spaced.split(RegExp(r'(\s+)'));
-    return tokens;
-  }
-
-  /// Мягкий перенос
+  /// Пытается выполнить мягкий перенос (по символу \u00AD).
   List<TextInlineElement>? _trySplitBySoftHyphen(TextInlineElement elem, double remainingWidth) {
     final raw = elem.text;
     final positions = <int>[];
@@ -323,6 +313,7 @@ class AdvancedLayoutEngine {
     for (int i = positions.length - 1; i >= 0; i--) {
       final idx = positions[i];
       if (idx < raw.length - 1) {
+        // leftPart + '-' + leftover
         final leftPart = raw.substring(0, idx) + '-';
         final rightPart = raw.substring(idx + 1);
 
@@ -336,8 +327,9 @@ class AdvancedLayoutEngine {
     }
     return null;
   }
+
+  /// Упрощённая функция, если нужно только список строк.
   CustomTextLayout layoutParagraphsOnly() {
     return _layoutAllParagraphs();
   }
-  
 }
