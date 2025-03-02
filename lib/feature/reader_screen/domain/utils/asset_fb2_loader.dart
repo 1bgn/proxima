@@ -13,9 +13,9 @@ import 'hyphenator.dart';
 import 'styles_config.dart';
 
 /// Класс для загрузки и парсинга FB2‑файла из ассетов.
-/// Элементы добавляются в порядке их следования в документе,
-/// а теги <section> обрабатываются так, что перед их содержимым
-/// вставляется специальный блок с startNewPage: true.
+/// Элементы добавляются в порядке их следования в документе.
+/// Теги <section> обрабатываются так, что после их содержимого вставляется специальный
+/// ParagraphBlock с isSectionEnd: true, а для текстовых блоков с <emphasis> устанавливается breakable: true.
 class AssetFB2Loader {
   final String assetPath;
   final Hyphenator hyphenator;
@@ -37,12 +37,9 @@ class AssetFB2Loader {
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
-
-    // Загружаем FB2-файл из ассетов.
     _fb2content = await rootBundle.loadString(assetPath);
     final doc = XmlDocument.parse(_fb2content!);
 
-    // Парсинг бинарных данных – изображения.
     _parseBinaries(doc);
 
     // Рекурсивно обходим все <body> элементы.
@@ -87,8 +84,8 @@ class AssetFB2Loader {
   }
 
   /// Рекурсивный обход XML-узлов внутри элемента.
-  /// Если встречается <section>, вставляется маркер начала новой страницы,
-  /// затем содержимое секции обрабатывается.
+  /// Если встречается <section>, сначала обрабатывается его содержимое,
+  /// затем добавляется отдельный ParagraphBlock с isSectionEnd: true.
   void _parseBody(XmlElement elem) {
     for (final node in elem.children) {
       if (node is XmlText && node.text.trim().isEmpty) continue;
@@ -97,7 +94,9 @@ class AssetFB2Loader {
       if (node is XmlElement) {
         final localName = node.name.local.toLowerCase();
         if (localName == 'section') {
-          // Вставляем маркер нового раздела – начало новой страницы.
+          // Обрабатываем содержимое секции.
+          _parseBody(node);
+          // После окончания секции добавляем маркер конца секции.
           _allParagraphs.add(ParagraphBlock(
             inlineElements: [],
             textAlign: null,
@@ -105,10 +104,8 @@ class AssetFB2Loader {
             firstLineIndent: 0,
             paragraphSpacing: 0,
             minimumLines: 0,
-            startNewPage: true,
+            isSectionEnd: true,
           ));
-          // Обрабатываем содержимое секции.
-          _parseBody(node);
         } else if (_isBlockElement(localName)) {
           final pb = _parseBlock(node);
           if (pb != null) _allParagraphs.add(pb);
@@ -150,10 +147,12 @@ class AssetFB2Loader {
       }
       return null;
     } else if (localName == 'annotation' ||
-        localName == 'epigraph' ||
         localName == 'poem' ||
         localName == 'text-author') {
       return _parseParagraph(elem, style: StylesConfig.baseText);
+    } else if (localName == 'epigraph') {
+      // Для эпиграфов разрешаем дробление.
+      return _parseParagraph(elem, style: StylesConfig.epigraph)?.copyWith(breakable: true);
     } else if (localName == 'title') {
       final pElems = elem.findElements('p');
       List<ParagraphBlock> blocks = [];
@@ -228,6 +227,9 @@ class AssetFB2Loader {
     }
   }
 
+  /// Парсит XML-элемент в ParagraphBlock.
+  /// Если содержимое включает текст с тегами <emphasis>, <i> или <em>,
+  /// то для возвращаемого блока устанавливается breakable: true.
   ParagraphBlock? _parseParagraph(XmlElement elem, {TextStyle? style, double? forcedMaxWidth}) {
     final inlines = <InlineElement>[];
     final baseStyle = style ?? StylesConfig.baseText;
@@ -264,7 +266,8 @@ class AssetFB2Loader {
               visit(child, newStyle);
             }
           } else if (tag == 'i' || tag == 'em' || tag == 'emphasis') {
-            final newStyle = currentStyle.copyWith(fontStyle: FontStyle.italic);
+            // При обработке тега emphasis задаём курсив и помечаем, что блок можно дробить.
+            final newStyle = currentStyle.copyWith(fontStyle: FontStyle.italic,);
             for (final child in node.children) {
               visit(child, newStyle);
             }
@@ -295,8 +298,16 @@ class AssetFB2Loader {
         visit(child, baseStyle);
       }
     }
-
     if (inlines.isEmpty) return null;
+
+    // Если хотя бы один inline-элемент имеет курсив, помечаем блок как breakable.
+    bool isBreakable = false;
+    for (final inline in inlines) {
+      if (inline is TextInlineElement && inline.style.fontStyle == FontStyle.italic) {
+        isBreakable = true;
+        break;
+      }
+    }
     return ParagraphBlock(
       inlineElements: inlines,
       textAlign: null,
@@ -305,6 +316,7 @@ class AssetFB2Loader {
       paragraphSpacing: 10,
       minimumLines: 1,
       maxWidth: forcedMaxWidth,
+      breakable: isBreakable,
     );
   }
 }

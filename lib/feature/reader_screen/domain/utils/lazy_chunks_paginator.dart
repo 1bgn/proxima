@@ -128,6 +128,7 @@ class LazyChunksPaginator {
   }
 
   /// Метод построения оффсетов с учетом свойства startNewPage в ParagraphBlock.
+  /// Метод построения оффсетов с учетом свойства isSectionEnd в ParagraphBlock.
   List<int> _buildOffsets(List<LineLayout> lines, List<int> paragraphIndexOfLine, List<ParagraphBlock> paras) {
     final result = <int>[];
     if (lines.isEmpty) {
@@ -138,14 +139,14 @@ class LazyChunksPaginator {
     double used = 0;
     result.add(0);
     for (int i = 0; i < lines.length; i++) {
-      // Если текущая строка принадлежит параграфу, помеченному как начало новой страницы,
+      // Если текущая строка принадлежит параграфу, помеченному как конец секции,
       // форсируем разрыв страницы.
       final paraIndex = paragraphIndexOfLine[i];
-      if (paras[paraIndex].startNewPage) {
+      if (paras[paraIndex].isSectionEnd) { // изменено: вместо startNewPage используем isSectionEnd
         if (i != 0) {
           curLine = i;
           result.add(curLine);
-          used = lines[i].height;
+          used = lines[i].height; // для маркера обычно равен 0
           continue;
         }
       }
@@ -165,6 +166,7 @@ class LazyChunksPaginator {
     }
     return result;
   }
+
 
   MultiColumnPage _buildPage(List<LineLayout> lines) {
     final cols = <List<LineLayout>>[];

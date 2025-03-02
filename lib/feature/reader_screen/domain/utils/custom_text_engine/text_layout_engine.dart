@@ -1,4 +1,4 @@
-// text_layout_engine.dart
+// custom_text_engine/text_layout_engine.dart
 //
 // Промышленная реализация движка AdvancedLayoutEngine,
 // поддерживающая ParagraphBlock.maxWidth и сохраняющая пробелы между словами.
@@ -30,18 +30,19 @@ class AdvancedLayoutEngine {
     required this.pageHeight,
   });
 
-  /// Выполняет полный layout и возвращает многостраничную раскладку (MultiColumnPagedLayout).
+  /// Выполняет полный layout и возвращает многостраничную раскладку.
   MultiColumnPagedLayout layoutAll() {
-    // 1. Разбиваем абзацы в строки
     final layout = _layoutAllParagraphs();
-    // 2. Разбиваем строки на страницы/колонки
     var multi = _buildMultiColumnPages(layout);
-    // 3. Простая (заглушка) логика сирот/вдов
     multi = _applyWidowOrphanControl(multi, layout);
     return multi;
   }
 
-  /// Шаг 1: Разбивает все абзацы в один список строк (LineLayout).
+  /// Метод, возвращающий только результат разбиения абзацев на строки.
+  CustomTextLayout layoutParagraphsOnly() {
+    return _layoutAllParagraphs();
+  }
+
   CustomTextLayout _layoutAllParagraphs() {
     final allLines = <LineLayout>[];
     final paragraphIndexOfLine = <int>[];
@@ -49,15 +50,35 @@ class AdvancedLayoutEngine {
 
     for (int pIndex = 0; pIndex < paragraphs.length; pIndex++) {
       final para = paragraphs[pIndex];
+
+      // Отладка: проверяем breakable и isSectionEnd
+      if (para.breakable) {
+        print("[DEBUG] paragraph $pIndex is breakable (possibly emphasis) ${para.inlineElements}");
+      } else {
+        print("[DEBUG] paragraph $pIndex is NOT breakable");
+      }
+      if (para.isSectionEnd) {
+        print("[DEBUG] paragraph $pIndex isSectionEnd == true ${para.inlineElements}");
+      }
+
       final lines = _layoutSingleParagraph(para);
 
-      // Запоминаем, к какому абзацу относятся эти строки
       for (int i = 0; i < lines.length; i++) {
         paragraphIndexOfLine.add(pIndex);
       }
       allLines.addAll(lines);
 
-      // Подсчёт виртуальной высоты абзаца (с учётом lineSpacing)
+      // Если это конец секции, вставляем "пустую" строку-маркер
+      if (para.isSectionEnd && allLines.isNotEmpty) {
+        final markerLine = LineLayout();
+        markerLine.width = 0;
+        markerLine.height = 0;
+        markerLine.maxAscent = 0;
+        markerLine.maxDescent = 0;
+        allLines.add(markerLine);
+        paragraphIndexOfLine.add(pIndex);
+      }
+
       double paraHeight = 0.0;
       for (int i = 0; i < lines.length; i++) {
         paraHeight += lines[i].height;
@@ -66,8 +87,9 @@ class AdvancedLayoutEngine {
         }
       }
       totalHeight += paraHeight;
+
       if (pIndex < paragraphs.length - 1) {
-        totalHeight += para.paragraphSpacing;
+        totalHeight += paragraphs[pIndex].paragraphSpacing;
       }
     }
 
@@ -78,9 +100,9 @@ class AdvancedLayoutEngine {
     );
   }
 
-  /// Шаг 1.1: Разбивает один абзац на строки, учитывая paragraph.maxWidth.
+
+  /// Разбивает один абзац на строки с учётом paragraph.maxWidth.
   List<LineLayout> _layoutSingleParagraph(ParagraphBlock paragraph) {
-    // Если maxWidth не задан, используем globalMaxWidth.
     final effectiveWidth = paragraph.maxWidth != null
         ? globalMaxWidth * paragraph.maxWidth!
         : globalMaxWidth;
@@ -88,7 +110,6 @@ class AdvancedLayoutEngine {
     final splitted = _splitTokens(paragraph.inlineElements);
     final result = <LineLayout>[];
     var currentLine = LineLayout();
-
     final isRTL = paragraph.textDirection == CustomTextDirection.rtl;
     double firstLineIndent = paragraph.firstLineIndent;
     double currentX = 0.0;
@@ -109,7 +130,6 @@ class AdvancedLayoutEngine {
       firstLineIndent = 0.0;
     }
 
-    // Проходимся по токенам (inline-элементам).
     for (final elem in splitted) {
       // Если блочное изображение, переносим на отдельную строку.
       if (elem is ImageInlineElement && elem.mode == ImageDisplayMode.block) {
@@ -135,9 +155,7 @@ class AdvancedLayoutEngine {
 
       elem.performLayout(availableWidth);
 
-      // Если не помещается
       if (currentX + elem.width > effectiveWidth && currentLine.elements.isNotEmpty) {
-        // Пытаемся выполнить мягкий перенос (\u00AD)
         if (elem is TextInlineElement && allowSoftHyphens) {
           final splittedPair = _trySplitBySoftHyphen(elem, effectiveWidth - currentX);
           if (splittedPair != null) {
@@ -157,7 +175,6 @@ class AdvancedLayoutEngine {
             maxAscent = math.max(maxAscent, rightPart.baseline);
             maxDescent = math.max(maxDescent, rightPart.height - rightPart.baseline);
           } else {
-            // Целиком переносим на новую строку
             commitLine();
             elem.performLayout(effectiveWidth);
             currentLine.elements.add(elem);
@@ -174,7 +191,6 @@ class AdvancedLayoutEngine {
           maxDescent = math.max(maxDescent, elem.height - elem.baseline);
         }
       } else {
-        // Помещается в текущую строку
         currentLine.elements.add(elem);
         currentX += elem.width;
         maxAscent = math.max(maxAscent, elem.baseline);
@@ -194,24 +210,29 @@ class AdvancedLayoutEngine {
     return result;
   }
 
-  /// Шаг 2: Разбивает строки на многостраничную/многоколоночную структуру.
+  /// Формирует многостраничную/многоколоночную раскладку.
   MultiColumnPagedLayout _buildMultiColumnPages(CustomTextLayout layout) {
     final lines = layout.lines;
     final pages = <MultiColumnPage>[];
-
     final totalColsSpacing = columnSpacing * (columns - 1);
     final colWidth = (globalMaxWidth - totalColsSpacing) / columns;
-
     int currentIndex = 0;
     while (currentIndex < lines.length) {
       final pageColumns = <List<LineLayout>>[];
-
       for (int col = 0; col < columns; col++) {
         final colLines = <LineLayout>[];
         double usedHeight = 0.0;
-
         while (currentIndex < lines.length) {
-          final line = lines[currentIndex];
+          LineLayout line = lines[currentIndex];
+          // Если это маркер конца секции (width == 0 && height == 0), страница обрывается резко.
+          if (line.width == 0 && line.height == 0) {
+            currentIndex++;
+            if (colLines.isNotEmpty) {
+              break;
+            } else {
+              continue;
+            }
+          }
           final lineHeight = line.height;
           if (colLines.isEmpty) {
             colLines.add(line);
@@ -224,6 +245,24 @@ class AdvancedLayoutEngine {
               usedHeight = needed;
               currentIndex++;
             } else {
+              // Если строка не помещается:
+              final paraIndex = layout.paragraphIndexOfLine[currentIndex];
+              final para = paragraphs[paraIndex];
+              // Если это конец секции, страница обрывается резко.
+              if (para.isSectionEnd) {
+                break;
+              }
+              // Для остальных, если абзац разрешён к дроблению, пытаемся разбить строку.
+              final available = pageHeight - usedHeight - lineSpacing;
+              if (para.breakable && available > 0) {
+                final splitPair = _splitLine(line, available);
+                if (splitPair != null) {
+                  colLines.add(splitPair.first);
+                  usedHeight = pageHeight; // Заполняем оставшееся пространство.
+                  // Остаток строки остаётся для следующей страницы.
+                  lines[currentIndex] = splitPair.second;
+                }
+              }
               break;
             }
           }
@@ -240,31 +279,60 @@ class AdvancedLayoutEngine {
         columnSpacing: columnSpacing,
       );
       pages.add(page);
-
-      if (currentIndex >= lines.length) {
-        break;
-      }
+      if (currentIndex >= lines.length) break;
     }
-
     return MultiColumnPagedLayout(pages);
   }
 
-  /// Шаг 3: Контроль сирот/вдов (заглушка).
+  /// Пытается разбить строку [line] так, чтобы первая часть умещалась в [availableHeight].
+  /// Перебирает inline-элементы и находит индекс для разделения.
+  /// Если дробление возможно, возвращает пару LineLayout: (fittingLine, remainingLine); иначе – null.
+  _LineSplitPair? _splitLine(LineLayout line, double availableHeight) {
+    if (line.elements.length < 2) return null;
+    double currentWidth = 0.0;
+    double maxAscent = 0.0;
+    double maxDescent = 0.0;
+    int splitIndex = 0;
+    for (int i = 0; i < line.elements.length; i++) {
+      final elem = line.elements[i];
+      currentWidth += elem.width;
+      maxAscent = math.max(maxAscent, elem.baseline);
+      maxDescent = math.max(maxDescent, elem.height - elem.baseline);
+      final tentativeHeight = maxAscent + maxDescent;
+      if (tentativeHeight > availableHeight) {
+        splitIndex = i;
+        break;
+      }
+    }
+    if (splitIndex <= 0 || splitIndex >= line.elements.length) return null;
+    final firstLine = LineLayout();
+    firstLine.elements = line.elements.sublist(0, splitIndex);
+    firstLine.width = firstLine.elements.fold(0, (sum, e) => sum + e.width);
+    firstLine.maxAscent = firstLine.elements.fold(0, (m, e) => math.max(m, e.baseline));
+    firstLine.maxDescent = firstLine.elements.fold(0, (m, e) => math.max(m, e.height - e.baseline));
+    firstLine.height = firstLine.maxAscent + firstLine.maxDescent;
+
+    final secondLine = LineLayout();
+    secondLine.elements = line.elements.sublist(splitIndex);
+    secondLine.width = secondLine.elements.fold(0, (sum, e) => sum + e.width);
+    secondLine.maxAscent = secondLine.elements.fold(0, (m, e) => math.max(m, e.baseline));
+    secondLine.maxDescent = secondLine.elements.fold(0, (m, e) => math.max(m, e.height - e.baseline));
+    secondLine.height = secondLine.maxAscent + secondLine.maxDescent;
+
+    return _LineSplitPair(firstLine, secondLine);
+  }
+
+  /// Контроль сирот/вдов – упрощённая заглушка.
   MultiColumnPagedLayout _applyWidowOrphanControl(
       MultiColumnPagedLayout multi,
-      CustomTextLayout layout,
-      ) {
-    // В реальном решении требуется более сложная логика пересчёта строк,
-    // здесь лишь оставлен пример (заглушка).
+      CustomTextLayout layout) {
     return multi;
   }
 
-  /// Разбивает inline-элементы на токены, **сохраняя пробелы**.
-  /// Для слов добавляем дополнительный пробел в конце ("$token "),
-  /// чтобы между словами в итоге оставался визуальный зазор.
+  /// Разбивает inline-элементы на токены, сохраняя пробелы.
+  /// Для слов добавляет дополнительный пробел в конце для визуального зазора.
   List<InlineElement> _splitTokens(List<InlineElement> elements) {
     final result = <InlineElement>[];
-
     for (final e in elements) {
       if (e is TextInlineElement) {
         final tokens = e.text.split(RegExp(r'(\s+)'));
@@ -272,10 +340,8 @@ class AdvancedLayoutEngine {
           if (token.isEmpty) continue;
           final isWhitespace = token.trim().isEmpty;
           if (isWhitespace) {
-            // Сохраняем пробельный токен как есть
             result.add(TextInlineElement(token, e.style));
           } else {
-            // Добавляем слово с дополнительным пробелом
             result.add(TextInlineElement("$token ", e.style));
           }
         }
@@ -291,15 +357,13 @@ class AdvancedLayoutEngine {
           }
         }
       } else {
-        // Изображения и т.д.
         result.add(e);
       }
     }
-
     return result;
   }
 
-  /// Пытается выполнить мягкий перенос (по символу \u00AD).
+  /// Пытается выполнить мягкий перенос (по символу \u00AD) для TextInlineElement.
   List<TextInlineElement>? _trySplitBySoftHyphen(TextInlineElement elem, double remainingWidth) {
     final raw = elem.text;
     final positions = <int>[];
@@ -309,14 +373,11 @@ class AdvancedLayoutEngine {
       }
     }
     if (positions.isEmpty) return null;
-
     for (int i = positions.length - 1; i >= 0; i--) {
       final idx = positions[i];
       if (idx < raw.length - 1) {
-        // leftPart + '-' + leftover
         final leftPart = raw.substring(0, idx) + '-';
         final rightPart = raw.substring(idx + 1);
-
         final testElem = TextInlineElement(leftPart, elem.style);
         testElem.performLayout(remainingWidth);
         if (testElem.width <= remainingWidth) {
@@ -327,9 +388,10 @@ class AdvancedLayoutEngine {
     }
     return null;
   }
+}
 
-  /// Упрощённая функция, если нужно только список строк.
-  CustomTextLayout layoutParagraphsOnly() {
-    return _layoutAllParagraphs();
-  }
+class _LineSplitPair {
+  final LineLayout first;
+  final LineLayout second;
+  _LineSplitPair(this.first, this.second);
 }

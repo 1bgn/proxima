@@ -31,7 +31,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _initAll() async {
     loader = AssetFB2Loader(
-      assetPath: 'assets/book2.fb2',
+      assetPath: 'assets/book.fb2',
       hyphenator:  Hyphenator(),
     );
     paginator = LazyChunksPaginator(

@@ -39,6 +39,11 @@ class TextInlineElement extends InlineElement {
   final String text;
   final TextStyle style;
 
+  @override
+  String toString() {
+    return 'TextInlineElement{text: $text}';
+  }
+
   ui.Paragraph? _paragraphCache;
 
   TextInlineElement(this.text, this.style);

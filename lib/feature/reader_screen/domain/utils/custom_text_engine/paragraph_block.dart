@@ -1,4 +1,4 @@
-// paragraph_block.dart
+// custom_text_engine/paragraph_block.dart
 import 'inline_elements.dart';
 
 enum CustomTextAlign {
@@ -7,8 +7,6 @@ enum CustomTextAlign {
   center,
   justify,
 }
-
-
 
 /// Абзац (параграф).
 class ParagraphBlock {
@@ -19,7 +17,8 @@ class ParagraphBlock {
   final double paragraphSpacing;
   final int minimumLines;
   final double? maxWidth;
-  final bool startNewPage; // Флаг, что этот блок требует начала новой страницы
+  final bool isSectionEnd; // Флаг, указывающий, что данный блок является маркером конца секции.
+  final bool breakable;    // Флаг, разрешающий дробление блока (например, для крупных эпиграфов).
 
   ParagraphBlock({
     required this.inlineElements,
@@ -29,7 +28,8 @@ class ParagraphBlock {
     this.paragraphSpacing = 0.0,
     this.minimumLines = 1,
     this.maxWidth,
-    this.startNewPage = false,
+    this.isSectionEnd = false,
+    this.breakable = false,
   });
 
   ParagraphBlock copyWith({
@@ -40,7 +40,8 @@ class ParagraphBlock {
     double? paragraphSpacing,
     int? minimumLines,
     double? maxWidth,
-    bool? startNewPage,
+    bool? isSectionEnd,
+    bool? breakable,
   }) {
     return ParagraphBlock(
       inlineElements: inlineElements ?? this.inlineElements,
@@ -50,7 +51,8 @@ class ParagraphBlock {
       paragraphSpacing: paragraphSpacing ?? this.paragraphSpacing,
       minimumLines: minimumLines ?? this.minimumLines,
       maxWidth: maxWidth ?? this.maxWidth,
-      startNewPage: startNewPage ?? this.startNewPage,
+      isSectionEnd: isSectionEnd ?? this.isSectionEnd,
+      breakable: breakable ?? this.breakable,
     );
   }
 }
