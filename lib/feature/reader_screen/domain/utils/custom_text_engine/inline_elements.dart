@@ -1,4 +1,4 @@
-// lib/custom_text_engine/inline_elements.dart
+// inline_elements.dart
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -38,6 +38,9 @@ abstract class InlineElement {
 class TextInlineElement extends InlineElement {
   final String text;
   final TextStyle style;
+
+  /// Флаг, указывающий, выделен ли данный текст.
+  bool isSelected = false;
 
   @override
   String toString() {
@@ -80,7 +83,7 @@ class TextInlineElement extends InlineElement {
     } else {
       baseline = height;
     }
-    // Заполняем selectionRects для интерактивности.
+    // Заполняем selectionRects для интерактивности и выделения.
     selectionRects = [];
     if (text.isNotEmpty) {
       final boxes = paragraph.getBoxesForRange(0, text.length);
@@ -97,6 +100,13 @@ class TextInlineElement extends InlineElement {
 
   @override
   void paint(ui.Canvas canvas, Offset offset) {
+    // Если элемент выделен, отрисовываем фон выделения.
+    if (isSelected) {
+      final highlightPaint = Paint()..color = Colors.yellow.withOpacity(0.5);
+      for (final rect in selectionRects) {
+        canvas.drawRect(rect.shift(offset), highlightPaint);
+      }
+    }
     if (_paragraphCache != null) {
       canvas.drawParagraph(_paragraphCache!, offset);
     }
@@ -119,7 +129,7 @@ class InlineLinkElement extends TextInlineElement {
     super.paint(canvas, offset);
     if (_paragraphCache != null) {
       final linkColor = style.color ?? Colors.blue;
-      final paint = Paint()..color = linkColor;
+      final underlinePaint = Paint()..color = linkColor;
       for (final rect in selectionRects) {
         final shifted = rect.shift(offset);
         final underlineRect = Rect.fromLTWH(
@@ -128,7 +138,7 @@ class InlineLinkElement extends TextInlineElement {
           shifted.width,
           1,
         );
-        canvas.drawRect(underlineRect, paint);
+        canvas.drawRect(underlineRect, underlinePaint);
       }
     }
   }
@@ -150,31 +160,45 @@ class ImageInlineElement extends InlineElement {
 
   @override
   void performLayout(double maxWidth) {
-    final w = (desiredWidth > maxWidth) ? maxWidth : desiredWidth;
-    width = w;
-    height = desiredHeight;
+    // Определяем целевую высоту: не более 100 px.
+    final targetHeight = math.min(desiredHeight, 100.0);
+    // Масштабируем изображение пропорционально.
+    double scale = targetHeight / desiredHeight;
+    double computedWidth = desiredWidth * scale;
+    // Если рассчитанная ширина превышает maxWidth, уменьшаем масштаб.
+    if (computedWidth > maxWidth) {
+      scale = maxWidth / desiredWidth;
+      computedWidth = maxWidth;
+      // Пересчитываем высоту, при этом не превышая 100 px.
+      final scaledHeight = desiredHeight * scale;
+      height = math.min(scaledHeight, 100.0);
+    } else {
+      height = targetHeight;
+    }
+    width = computedWidth;
     baseline = height; // baseline равна высоте
   }
 
   @override
   void paint(ui.Canvas canvas, Offset offset) {
-    final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final srcRect = Rect.fromLTWH(
+      0,
+      0,
+      image.width.toDouble(),
+      image.height.toDouble(),
+    );
     final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
     canvas.drawImageRect(image, srcRect, dstRect, Paint());
   }
 }
 
 /// Отображает изображение, которое загружается асинхронно.
-// Отображает изображение, которое загружается асинхронно.
 class ImageFutureInlineElement extends InlineElement {
   final Future<ui.Image> future;
   final double? desiredWidth;
   final double? desiredHeight;
   final double minHeight;
-
-  /// Колбэк, который вызовется после успешной загрузки изображения.
   final VoidCallback? onImageLoaded;
-
   ui.Image? _image;
 
   ImageFutureInlineElement({
@@ -186,7 +210,6 @@ class ImageFutureInlineElement extends InlineElement {
   }) {
     future.then((img) {
       _image = img;
-      // После загрузки вызываем колбэк, чтобы движок узнал о готовности изображения.
       onImageLoaded?.call();
     });
   }
@@ -194,30 +217,27 @@ class ImageFutureInlineElement extends InlineElement {
   @override
   void performLayout(double maxWidth) {
     if (_image != null) {
-      final w = _image!.width.toDouble();
-      final h = _image!.height.toDouble();
-
-      // Сохраняем пропорции, если desiredWidth не указана.
-      // Если же desiredWidth указана, используем её (с сохранением aspect ratio, если нужно).
-      double scale = 1.0;
-      if (desiredWidth != null) {
-        // Масштабируем к желаемой ширине
-        scale = desiredWidth! / w;
-      } else if (w > maxWidth) {
-        // Если натуральная ширина больше maxWidth, уменьшаем
-        scale = maxWidth / w;
+      final naturalWidth = _image!.width.toDouble();
+      final naturalHeight = _image!.height.toDouble();
+      // Целевая высота не более 100 px.
+      final targetHeight = math.min(naturalHeight, 100.0);
+      double scale = targetHeight / naturalHeight;
+      double computedWidth = naturalWidth * scale;
+      // Если рассчитанная ширина превышает maxWidth, корректируем масштаб.
+      if (computedWidth > maxWidth) {
+        scale = maxWidth / naturalWidth;
+        computedWidth = maxWidth;
       }
-      width = w * scale;
-
-      // Для высоты, если desiredHeight не указана, вычисляем пропорционально.
-      if (desiredHeight != null) {
-        height = desiredHeight!;
-      } else {
-        height = (h * scale).clamp(minHeight, double.infinity);
+      width = computedWidth;
+      height = naturalHeight * scale;
+      // На всякий случай гарантируем, что высота не больше 100 px.
+      if (height > 100) {
+        scale = 100 / naturalHeight;
+        width = naturalWidth * scale;
+        height = 100;
       }
       baseline = height;
     } else {
-      // Изображение ещё не загружено – рисуем placeholder
       width = maxWidth;
       height = minHeight;
       baseline = height;
@@ -227,21 +247,22 @@ class ImageFutureInlineElement extends InlineElement {
   @override
   void paint(ui.Canvas canvas, Offset offset) {
     if (_image != null) {
-      final srcRect = Rect.fromLTWH(0, 0, _image!.width.toDouble(), _image!.height.toDouble());
+      final srcRect = Rect.fromLTWH(
+        0,
+        0,
+        _image!.width.toDouble(),
+        _image!.height.toDouble(),
+      );
       final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
       canvas.drawImageRect(_image!, srcRect, dstRect, Paint());
     } else {
-      // Placeholder
-      final paint = Paint()..color = Colors.grey.shade300;
+      final placeholderPaint = Paint()..color = Colors.grey.shade300;
       final rect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
-      canvas.drawRect(rect, paint);
-
+      canvas.drawRect(rect, placeholderPaint);
       final borderPaint = Paint()
         ..color = Colors.grey
         ..style = PaintingStyle.stroke;
       canvas.drawRect(rect, borderPaint);
-
-      // Текст "Loading image..."
       final textStyle = ui.TextStyle(
         color: Colors.grey.shade700,
         fontSize: 12,
