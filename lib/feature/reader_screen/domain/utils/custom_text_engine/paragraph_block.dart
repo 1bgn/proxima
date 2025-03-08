@@ -9,6 +9,12 @@ enum CustomTextAlign {
 }
 
 /// Абзац (параграф).
+// custom_text_engine/paragraph_block.dart
+
+/// Абзац (параграф).
+// custom_text_engine/paragraph_block.dart
+
+/// Абзац (параграф).
 class ParagraphBlock {
   final List<InlineElement> inlineElements;
   final CustomTextAlign? textAlign;
@@ -56,3 +62,5 @@ class ParagraphBlock {
     );
   }
 }
+
+

@@ -8,9 +8,11 @@ class LineLayout {
   double maxAscent = 0;
   double maxDescent = 0;
 
+  // Новый флаг для обозначения конца секции
+  bool isSectionEnd = false;
+
   double get baseline => maxAscent;
 }
-
 class CustomTextLayout {
   final List<LineLayout> lines;
   final double totalHeight;

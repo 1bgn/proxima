@@ -37,14 +37,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
     paginator = LazyChunksPaginator(
       loader: loader,
-      chunkSize: 50,
+      chunkSize: 100,
       globalMaxWidth: 400,
       lineSpacing: 4,
       pageHeight: 600,
       columns: 1,
       columnSpacing: 20,
       allowSoftHyphens: true,
-      lruCapacity: 5,
+      lruCapacity: 10,
     );
     await paginator.init();
     setState(() {
@@ -86,7 +86,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               controller: pageFieldController,
               keyboardType: TextInputType.number,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 16),
+              style: TextStyle(color: Colors.black, fontSize: 16),
               decoration: InputDecoration(border: InputBorder.none),
               onSubmitted: (val) {
                 final p = int.tryParse(val) ?? currentPage;
