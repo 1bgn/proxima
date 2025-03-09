@@ -6,7 +6,7 @@ import 'custom_text_engine/line_layout.dart';
 import 'custom_text_engine/paragraph_block.dart';
 import 'custom_text_engine/text_layout_engine.dart';
 import 'hyphenator.dart';
-import 'lazy_chunks_paginator.dart';
+import 'optimized_lazy_paginator.dart';
 
 class ReaderScreen extends StatefulWidget {
   final int startPage;

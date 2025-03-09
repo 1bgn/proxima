@@ -5,8 +5,9 @@ import 'paragraph_block.dart';
 import 'line_layout.dart';
 
 /// AdvancedLayoutEngine разбивает абзацы на строки и формирует многостраничную раскладку.
-/// Разрывы страниц происходят либо при переполнении, либо при встрече абзаца с isSectionEnd==true.
-/// Если абзац с выравниванием right (например, text-author) не начинается с новой строки, вставляем пустой блок.
+/// Для корректного разделения по секциям необходимо использовать layoutAll(), который учитывает
+/// маркер конца секции (isSectionEnd == true). Если абзац с выравниванием right (например, text-author)
+/// не начинается с новой строки, перед ним добавляется пустой блок, чтобы гарантировать, что он будет с новой строки.
 class AdvancedLayoutEngine {
   final List<ParagraphBlock> paragraphs;
   final double globalMaxWidth;
@@ -28,20 +29,20 @@ class AdvancedLayoutEngine {
     required this.pageHeight,
   });
 
-  /// Основной метод лейаута: сначала строим одноколоночную раскладку строк, затем формируем страницы.
+  /// Метод layoutAll() собирает полную многостраничную раскладку, учитывая разрывы страниц между секциями.
   MultiColumnPagedLayout layoutAll() {
     final layout = _layoutAllParagraphs();
+    // Для корректного разделения по секциям обязательно используем этот метод:
     final multi = _buildPagesWithSectionBreaks(layout);
     return multi;
   }
 
-  /// Метод, возвращающий только разбиение на строки (без формирования страниц).
+  /// Метод, возвращающий только разбиение абзацев на строки (без формирования страниц).
   CustomTextLayout layoutParagraphsOnly() {
     return _layoutAllParagraphs();
   }
 
-  // --- Шаг 1. Разбивка абзацев на строки ---
-
+  /// --- Шаг 1. Разбивка абзацев на строки ---
   CustomTextLayout _layoutAllParagraphs() {
     final allLines = <LineLayout>[];
     final paragraphIndexOfLine = <int>[];
@@ -50,10 +51,9 @@ class AdvancedLayoutEngine {
     for (int pIndex = 0; pIndex < paragraphs.length; pIndex++) {
       final para = paragraphs[pIndex];
 
-      // Если параграф с выравниванием right (например, text-author) – начинаем его с новой строки,
-      // если предыдущий абзац не завершён. Это гарантирует, что текст-author отображается с новой строки.
+      // Если параграф имеет выравнивание right (например, text-author),
+      // а предыдущий блок не завершён, вставляем пустой блок, чтобы начать с новой строки.
       if (para.textAlign == CustomTextAlign.right && allLines.isNotEmpty) {
-        // Добавляем пустую строку (блок с нулевой высотой)
         allLines.add(LineLayout());
         paragraphIndexOfLine.add(pIndex);
       }
@@ -64,7 +64,6 @@ class AdvancedLayoutEngine {
       }
       allLines.addAll(lines);
 
-      // Подсчитываем высоту абзаца (строки + межстрочный интервал)
       double paraH = 0.0;
       for (int i = 0; i < lines.length; i++) {
         paraH += lines[i].height;
@@ -85,11 +84,13 @@ class AdvancedLayoutEngine {
     );
   }
 
-  /// Разбивает один абзац (ParagraphBlock) на строки (LineLayout).
+  /// Разбивка одного ParagraphBlock на строки.
   List<LineLayout> _layoutSingleParagraph(ParagraphBlock paragraph) {
     final effectiveWidth = paragraph.maxWidth != null
         ? globalMaxWidth * paragraph.maxWidth!
         : globalMaxWidth;
+
+    // Разбиваем inline-элементы на «токены»
     final splitted = _splitTokens(paragraph.inlineElements);
     final result = <LineLayout>[];
     var currentLine = LineLayout();
@@ -106,6 +107,7 @@ class AdvancedLayoutEngine {
       currentLine.maxDescent = maxDescent;
       currentLine.height = maxAscent + maxDescent;
       result.add(currentLine);
+
       currentLine = LineLayout();
       currentX = 0.0;
       maxAscent = 0.0;
@@ -122,7 +124,6 @@ class AdvancedLayoutEngine {
         availableWidth -= firstLineIndent;
       }
       elem.performLayout(availableWidth);
-
       if (currentX + elem.width > effectiveWidth && currentLine.elements.isNotEmpty) {
         if (elem is TextInlineElement && allowSoftHyphens) {
           final splittedPair = _trySplitBySoftHyphen(elem, effectiveWidth - currentX);
@@ -135,6 +136,7 @@ class AdvancedLayoutEngine {
             maxAscent = math.max(maxAscent, leftPart.baseline);
             maxDescent = math.max(maxDescent, leftPart.height - leftPart.baseline);
             commitLine();
+
             rightPart.performLayout(effectiveWidth);
             currentLine.elements.add(rightPart);
             currentX = rightPart.width;
@@ -173,19 +175,17 @@ class AdvancedLayoutEngine {
         line.elements = line.elements.reversed.toList();
       }
     }
-
     return result;
   }
 
-  /// =======================
-  /// Шаг 2. Формирование многостраничной раскладки с разделением по секциям.
-  /// =======================
+  /// --- Шаг 2. Построение многостраничной раскладки с разделением по секциям ---
+  /// Группируем строки в секции: каждая секция заканчивается абзацем с isSectionEnd == true (обычно это пустая строка).
   MultiColumnPagedLayout _buildPagesWithSectionBreaks(CustomTextLayout layout) {
     final lines = layout.lines;
     final pIndexLine = layout.paragraphIndexOfLine;
     final pages = <MultiColumnPage>[];
 
-    // Группируем строки в секции: каждая секция заканчивается абзацем с isSectionEnd==true
+    // Группируем строки по секциям.
     final sections = <List<LineLayout>>[];
     var currentSection = <LineLayout>[];
     for (int i = 0; i < lines.length; i++) {
@@ -194,8 +194,11 @@ class AdvancedLayoutEngine {
       final paraIndex = pIndexLine[i];
       if (paraIndex >= 0 && paraIndex < paragraphs.length) {
         final para = paragraphs[paraIndex];
-        // Если абзац помечен как конец секции и строка пустая (маркер)
+
+        // Если абзац помечен как конец секции и строка является пустым маркером.
         if (para.isSectionEnd && line.width == 0 && line.height == 0) {
+
+          print("brebreber");
           sections.add(currentSection);
           currentSection = <LineLayout>[];
         }
@@ -205,7 +208,7 @@ class AdvancedLayoutEngine {
       sections.add(currentSection);
     }
 
-    // Формирование страниц на основе секций
+    // Построение страниц: каждая секция завершается разрывом страницы.
     final totalColSpacing = columnSpacing * (columns - 1);
     final colWidth = (globalMaxWidth - totalColSpacing) / columns;
 
@@ -227,22 +230,18 @@ class AdvancedLayoutEngine {
     }
 
     void addLineToCurrentCol(LineLayout line) {
-      // Если строка (например, картинка) слишком высокая, переносим её на новую страницу
+      // Если строка (например, с изображением) слишком высокая, переносим её на новую страницу.
       if (line.height > pageHeight) {
         commitPage();
-        // Добавляем строку как единственный элемент на новой странице
         pageCols[currentCol].add(line);
         usedHeights[currentCol] = line.height;
         return;
       }
-
       final needed = (usedHeights[currentCol] == 0.0)
           ? line.height
           : (usedHeights[currentCol] + lineSpacing + line.height);
       if (needed <= pageHeight) {
-        if (usedHeights[currentCol] > 0.0) {
-          usedHeights[currentCol] += lineSpacing;
-        }
+        if (usedHeights[currentCol] > 0.0) usedHeights[currentCol] += lineSpacing;
         pageCols[currentCol].add(line);
         usedHeights[currentCol] += line.height;
       } else {
@@ -255,19 +254,17 @@ class AdvancedLayoutEngine {
       }
     }
 
-    // Основной цикл по секциям:
+    // Основной цикл: для каждой секции добавляем строки, затем завершаем страницу.
     for (int s = 0; s < sections.length; s++) {
       final section = sections[s];
       for (int i = 0; i < section.length; i++) {
         final line = section[i];
-        final paraIdx = pIndexLine[i]; // индекс абзаца для этой строки
+        final paraIdx = pIndexLine[i];
         addLineToCurrentCol(line);
       }
-      // По окончании секции, форсируем разрыв страницы
-      commitPage();
+      commitPage(); // форсированный разрыв после секции
     }
 
-    // Если осталась незавершенная страница, коммитим её
     if (pageCols.any((col) => col.isNotEmpty)) {
       commitPage();
     }
@@ -275,11 +272,8 @@ class AdvancedLayoutEngine {
     return MultiColumnPagedLayout(pages);
   }
 
-  /// =======================
-  /// Вспомогательные методы
-  /// =======================
-
-  /// Разбивает inline-элементы на токены (учитывая пробелы).
+  /// --- Вспомогательные методы ---
+  /// Разбивает inline-элементы на «токены», сохраняя пробелы.
   List<InlineElement> _splitTokens(List<InlineElement> elements) {
     final result = <InlineElement>[];
     for (final e in elements) {
@@ -287,8 +281,8 @@ class AdvancedLayoutEngine {
         final tokens = e.text.split(RegExp(r'(\s+)'));
         for (final token in tokens) {
           if (token.isEmpty) continue;
-          final isWhitespace = token.trim().isEmpty;
-          if (isWhitespace) {
+          final isSpace = token.trim().isEmpty;
+          if (isSpace) {
             result.add(TextInlineElement(token, e.style));
           } else {
             result.add(TextInlineElement("$token ", e.style));
@@ -298,8 +292,8 @@ class AdvancedLayoutEngine {
         final tokens = e.text.split(RegExp(r'(\s+)'));
         for (final token in tokens) {
           if (token.isEmpty) continue;
-          final isWhitespace = token.trim().isEmpty;
-          if (isWhitespace) {
+          final isSpace = token.trim().isEmpty;
+          if (isSpace) {
             result.add(InlineLinkElement(token, e.style, e.url));
           } else {
             result.add(InlineLinkElement("$token ", e.style, e.url));
@@ -312,7 +306,7 @@ class AdvancedLayoutEngine {
     return result;
   }
 
-  /// Пытается выполнить мягкий перенос (soft hyphen, \u00AD) для TextInlineElement.
+  /// Мягкий перенос по символу \u00AD (soft hyphen).
   List<TextInlineElement>? _trySplitBySoftHyphen(TextInlineElement elem, double remainingWidth) {
     final raw = elem.text;
     final positions = <int>[];

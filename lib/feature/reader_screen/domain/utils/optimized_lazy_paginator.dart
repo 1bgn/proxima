@@ -1,4 +1,4 @@
-// lazy_chunks_paginator.dart
+// optimized_lazy_paginator.dart
 import 'asset_fb2_loader.dart';
 import 'custom_text_engine/line_layout.dart';
 import 'custom_text_engine/paragraph_block.dart';
