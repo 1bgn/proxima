@@ -1,4 +1,5 @@
 // asset_fb2_loader.dart
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -12,8 +13,7 @@ import 'custom_text_engine/paragraph_block.dart';
 import 'hyphenator.dart';
 import 'styles_config.dart';
 
-/// Новый inline-элемент, обозначающий маркер конца секции.
-/// При layout устанавливает ширину и высоту равными 0.
+/// Inline-элемент, обозначающий конец секции
 class SectionBreakInlineElement extends InlineElement {
   @override
   void performLayout(double maxWidth) {
@@ -23,13 +23,10 @@ class SectionBreakInlineElement extends InlineElement {
   }
 
   @override
-  void paint(ui.Canvas canvas, Offset offset) {
-    // Ничего не рисуем
-  }
+  void paint(ui.Canvas canvas, Offset offset) {}
 }
 
-/// Inline-элемент для изображений, который использует уже декодированное ui.Image
-/// для вычисления итоговых размеров на основе натуральных размеров изображения.
+/// Inline-элемент для изображений, использующий декодированный ui.Image
 class ImageInlineElement extends InlineElement {
   final ui.Image image;
   final double desiredWidth;
@@ -67,20 +64,17 @@ class ImageInlineElement extends InlineElement {
   }
 }
 
-/// Пример FB2-парсера, который:
-/// • Загружает и парсит весь документ целиком.
-/// • Для элементов <title>, <subtitle> и <text-author> каждый вложенный <p>
-///   обрабатывается как отдельный ParagraphBlock (для text-author – выравнивание по правой стороне).
-/// • Все бинарные данные (изображения) декодируются заранее и сохраняются в _decodedImages,
-///   что позволяет сразу вычислять итоговые размеры изображений.
+/// Простой FB2-парсер, позволяющий обрабатывать <epigraph>:
+/// 1) Не превращает весь epigraph в один блок, а рекурсивно извлекает вложенные <p>, <text-author> и т.п.
+/// 2) Добавляет два ParagraphBlock: один для <p>, другой для <text-author>.
 class AssetFB2Loader {
   final String assetPath;
   final Hyphenator hyphenator;
 
   bool _initialized = false;
   String? _fb2Content;
+
   final List<ParagraphBlock> _allParagraphs = [];
-  // Храним уже декодированные изображения.
   final Map<String, ui.Image> _decodedImages = {};
 
   AssetFB2Loader({
@@ -88,7 +82,6 @@ class AssetFB2Loader {
     required this.hyphenator,
   });
 
-  /// Инициализация: загружаем FB2, декодируем бинарные данные и сохраняем абзацы.
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
@@ -96,27 +89,23 @@ class AssetFB2Loader {
     _fb2Content = await rootBundle.loadString(assetPath);
     final doc = XmlDocument.parse(_fb2Content!);
 
-    // Декодируем все бинарные данные (изображения)
+    // 1. Сначала декодируем <binary> => _decodedImages
     await _parseBinaries(doc);
 
-    // Рекурсивно обходим все элементы <body> и строим абзацы
+    // 2. Идём по всем <body> и обрабатываем рекурсивно
     final bodies = doc.findAllElements('body');
     for (final body in bodies) {
       _processNode(body);
     }
   }
 
-  /// Возвращает общее количество абзацев в документе.
-  int countParagraphs() => _allParagraphs.length;
-
-  /// Возвращает список ВСЕХ абзацев (полный документ).
+  /// Возвращает список всех абзацев
   Future<List<ParagraphBlock>> loadAllParagraphs() async {
     await init();
     return List.unmodifiable(_allParagraphs);
   }
 
-  /// Возвращает часть абзацев для ленивого отображения.
-  /// Параметр chunkSize используется только для UI, а не влияет на разрывы страниц.
+  /// Возвращает часть абзацев для ленивого отображения
   Future<List<ParagraphBlock>> loadChunk(int chunkIndex, int chunkSize) async {
     await init();
     final start = chunkIndex * chunkSize;
@@ -125,6 +114,7 @@ class AssetFB2Loader {
     return _allParagraphs.sublist(start, end);
   }
 
+  /// Декодируем <binary>
   Future<void> _parseBinaries(XmlDocument doc) async {
     final binaries = doc.findAllElements('binary');
     for (final bin in binaries) {
@@ -149,36 +139,47 @@ class AssetFB2Loader {
     return completer.future;
   }
 
-  /// Рекурсивный обход тегов FB2.
-  /// Для тега <section> обрабатываем содержимое, затем добавляем маркер конца секции.
+  /// Рекурсивный обход FB2-тегов
   void _processNode(XmlNode node) {
-    if (node is XmlText) {
-      if (node.text.trim().isEmpty) return;
-    } else if (node is XmlComment) {
-      return;
-    } else if (node is XmlElement) {
+    if (node is XmlElement) {
       final tag = node.name.local.toLowerCase();
+
       if (tag == 'section') {
+        // Вложенные узлы
         for (final child in node.children) {
           _processNode(child);
         }
-        _allParagraphs.add(ParagraphBlock(
-          inlineElements: [SectionBreakInlineElement()],
-          isSectionEnd: true,
-          breakable: false,
-        ));
-      } else if (tag == 'empty-line') {
-        _allParagraphs.add(ParagraphBlock(
-          inlineElements: [TextInlineElement("\n", StylesConfig.baseText)],
-          paragraphSpacing: 10,
-          breakable: false,
-        ));
-      } else if (_isBlockElement(tag)) {
-        final blocks = _parseBlockOrMulti(elem: node);
-        for (final b in blocks) {
-          _allParagraphs.add(b);
-        }
-      } else {
+        // Маркер конца секции
+        _allParagraphs.add(
+          ParagraphBlock(
+            inlineElements: [SectionBreakInlineElement()],
+            isSectionEnd: true,
+            breakable: false,
+          ),
+        );
+      }
+      else if (tag == 'empty-line') {
+        // Пустая строка
+        _allParagraphs.add(
+          ParagraphBlock(
+            inlineElements: [TextInlineElement("\n", StylesConfig.baseText)],
+            paragraphSpacing: 10,
+            breakable: false,
+          ),
+        );
+      }
+      else if (tag == 'epigraph') {
+        // КЛЮЧЕВОЙ момент: не делаем из epigraph один абзац,
+        // а разбираем каждого дочернего блочного ребёнка по отдельности
+        _parseEpigraph(node);
+      }
+      else if (_isBlockElement(tag)) {
+        // Прочие блочные элементы (<p>, <text-author>, <subtitle> и т.д.)
+        final blocks = _parseBlockOrMulti(node);
+        _allParagraphs.addAll(blocks);
+      }
+      else {
+        // Рекурсивный обход
         for (final child in node.children) {
           _processNode(child);
         }
@@ -201,23 +202,65 @@ class AssetFB2Loader {
     return blockTags.contains(tag);
   }
 
-  /// Если элемент содержит несколько <p> (например, <title>, <subtitle>, <text-author>),
-  /// возвращаем ParagraphBlock для каждого <p>.
-  /// Если вложенных <p> нет, для text-author дополнительно проверяем, есть ли текстовое содержимое.
-  List<ParagraphBlock> _parseBlockOrMulti({required XmlElement elem}) {
+  /// Рекурсивно обходим детей epigraph,
+  /// если встречаем блочные элементы (p, text-author и т.д.), создаём ParagraphBlock
+  void _parseEpigraph(XmlElement epigraphNode) {
+    for (final child in epigraphNode.children) {
+      if (child is XmlElement) {
+        final childTag = child.name.local.toLowerCase();
+        if (_isBlockElement(childTag)) {
+          // Создаём (возможно, несколько) абзацев
+          final blocks = _parseBlockOrMulti(child);
+          // Для epigraph можно добавить breakable = true, если хотим,
+          // чтобы эпиграф мог разделяться на границе страницы
+          for (final b in blocks) {
+            _allParagraphs.add(
+              b.copyWith(breakable: true, paragraphSpacing: 5),
+            );
+          }
+        } else {
+          // Если не блочный элемент (например, <strong>), рекурсивно проходим
+          _processNode(child);
+        }
+      }
+      else if (child is XmlText) {
+        // Если внутри epigraph есть простой текст, создаём ParagraphBlock
+        final text = child.text.trim();
+        if (text.isNotEmpty) {
+          _allParagraphs.add(
+            ParagraphBlock(
+              inlineElements: [
+                TextInlineElement(text, StylesConfig.epigraph),
+              ],
+              textAlign: CustomTextAlign.left,
+              textDirection: CustomTextDirection.ltr,
+              firstLineIndent: 20,
+              paragraphSpacing: 10,
+              minimumLines: 1,
+              maxWidth: null,
+              isSectionEnd: false,
+              breakable: true,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /// Если элемент содержит <p>, возвращаем список ParagraphBlock,
+  /// иначе обрабатываем элемент как единый блок
+  List<ParagraphBlock> _parseBlockOrMulti(XmlElement elem) {
     final tag = elem.name.local.toLowerCase();
     final pElements = elem.findElements('p').toList();
+
+    // Если элемент (например, <title>) содержит несколько <p>,
+    // каждый <p> превращается в отдельный ParagraphBlock
     if (pElements.isNotEmpty) {
       final result = <ParagraphBlock>[];
       for (final p in pElements) {
-        CustomTextAlign align = (tag == 'text-author')
-            ? CustomTextAlign.right
-            : (tag == 'title' || tag == 'subtitle')
-            ? CustomTextAlign.center
-            : CustomTextAlign.left;
         final block = _parseParagraph(p, style: _decideStyleFor(tag))?.copyWith(
-          textAlign: align,
-          firstLineIndent: (tag == 'p') ? 20 : (tag == 'text-author' ? 0 : 0),
+          textAlign: _decideAlignFor(tag),
+          firstLineIndent: (tag == 'p') ? 20 : 0,
           paragraphSpacing: 15,
         );
         if (block != null) {
@@ -226,26 +269,10 @@ class AssetFB2Loader {
       }
       return result;
     } else {
-      // Если тег text-author не содержит <p>, но имеет текстовое содержимое, создаем блок из него.
-      if (tag == 'text-author' && elem.text.trim().isNotEmpty) {
-
-        final inline = TextInlineElement(elem.text.trim(), _decideStyleFor(tag));
-        return [
-          ParagraphBlock(
-            inlineElements: [inline],
-            textAlign: CustomTextAlign.right,
-            textDirection: CustomTextDirection.ltr,
-            firstLineIndent: 0,
-            paragraphSpacing: 15,
-            minimumLines: 1,
-            maxWidth: null,
-            isSectionEnd: false,
-            breakable: false,
-          )
-        ];
-      }
-      // Если нет вложенных <p>, обрабатываем элемент как единый блок.
-      return [_parseBlock(elem)!];
+      // Иначе обрабатываем элемент как единый блок
+      final singleBlock = _parseBlock(elem);
+      if (singleBlock != null) return [singleBlock];
+      return [];
     }
   }
 
@@ -257,12 +284,27 @@ class AssetFB2Loader {
         return StylesConfig.subtitleFont;
       case 'text-author':
         return StylesConfig.authorFont;
+      case 'epigraph':
+        return StylesConfig.epigraph;
       default:
         return StylesConfig.baseText;
     }
   }
 
-  /// Обрабатывает элемент как единый блок (если не содержит вложенных <p>).
+  CustomTextAlign _decideAlignFor(String tag) {
+    switch (tag) {
+      case 'text-author':
+        return CustomTextAlign.right;
+      case 'title':
+      case 'subtitle':
+
+        return CustomTextAlign.center;
+      default:
+        return CustomTextAlign.left;
+    }
+  }
+
+  /// Обрабатываем элемент как единый блок
   ParagraphBlock? _parseBlock(XmlElement elem) {
     final tag = elem.name.local.toLowerCase();
     switch (tag) {
@@ -287,7 +329,11 @@ class AssetFB2Loader {
       case 'poem':
         return _parseParagraph(elem, style: StylesConfig.baseText);
       case 'epigraph':
-        return _parseParagraph(elem, style: StylesConfig.epigraph)?.copyWith(breakable: true);
+      // Вместо того, чтобы превращать epigraph в один блок,
+      // вызываем _parseEpigraph. Здесь можно вернуть null,
+      // так как _parseEpigraph сам добавит ParagraphBlock'и в _allParagraphs.
+        _parseEpigraph(elem);
+        return null;
       case 'text-author':
         return _parseParagraph(elem, style: StylesConfig.authorFont)?.copyWith(
           textAlign: CustomTextAlign.right,
@@ -305,6 +351,7 @@ class AssetFB2Loader {
           paragraphSpacing: 15,
         );
       default:
+      // Прочие теги
         return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
           textAlign: CustomTextAlign.left,
           firstLineIndent: 0,
@@ -312,12 +359,12 @@ class AssetFB2Loader {
     }
   }
 
-  /// Основная логика обработки элемента как абзаца.
-  /// Для тега <image> извлекаем изображение из _decodedImages и создаём ImageInlineElement.
+  /// Собираем inline-элементы (текст, жирный, курсив, <image>)
   ParagraphBlock? _parseParagraph(XmlElement elem, {TextStyle? style}) {
     final inlines = <InlineElement>[];
     final baseStyle = style ?? StylesConfig.baseText;
 
+    // Если это одиночный <image>
     if (elem.name.local.toLowerCase() == 'image' && elem.children.isEmpty) {
       final href = elem.getAttribute('l:href') ??
           elem.getAttribute('xlink:href') ??
@@ -334,6 +381,7 @@ class AssetFB2Loader {
         }
       }
     } else {
+      // Рекурсивный обход
       void visit(XmlNode node, TextStyle currentStyle) {
         if (node is XmlText) {
           final text = node.text.replaceAll(RegExp(r'\s+'), ' ');
@@ -369,6 +417,7 @@ class AssetFB2Loader {
               }
             }
           } else {
+            // Рекурсивно обходим вложенные теги
             for (final child in node.children) {
               visit(child, currentStyle);
             }
@@ -379,6 +428,7 @@ class AssetFB2Loader {
         visit(child, baseStyle);
       }
     }
+
     if (inlines.isEmpty) return null;
 
     return ParagraphBlock(

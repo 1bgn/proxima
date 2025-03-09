@@ -15,7 +15,7 @@ import 'custom_text_engine/text_layout_engine.dart';
 class OptimizedLazyPaginator {
   final AssetFB2Loader loader;
   final int chunkSize; // используется только для UI, а не для вычисления разрывов страниц
-
+  CustomTextLayout? get fullLayout => _fullLayout;
   double globalMaxWidth;
   double lineSpacing;
   double pageHeight;

@@ -15,6 +15,8 @@ enum CustomTextAlign {
 // custom_text_engine/paragraph_block.dart
 
 /// Абзац (параграф).
+// custom_text_engine/paragraph_block.dart
+
 class ParagraphBlock {
   final List<InlineElement> inlineElements;
   final CustomTextAlign? textAlign;
@@ -23,8 +25,8 @@ class ParagraphBlock {
   final double paragraphSpacing;
   final int minimumLines;
   final double? maxWidth;
-  final bool isSectionEnd; // Флаг, указывающий, что данный блок является маркером конца секции.
-  final bool breakable;    // Флаг, разрешающий дробление блока (например, для крупных эпиграфов).
+  final bool isSectionEnd;
+  final bool breakable;
 
   ParagraphBlock({
     required this.inlineElements,
