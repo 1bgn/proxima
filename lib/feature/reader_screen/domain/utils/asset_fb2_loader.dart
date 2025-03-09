@@ -221,11 +221,11 @@ class AssetFB2Loader {
           final blocks = _parseBlockOrMulti(child);
           // Передаем родительские параметры, если они не заданы в самом блоке
           for (final b in blocks) {
-            print("b.inlineElements: ${b.inlineElements} b.containerAlignment:${b.containerAlignment} epigraphContainerAlignment: $epigraphContainerAlignment");
             _allParagraphs.add(
               b.copyWith(
                 breakable: true,
                 paragraphSpacing: 5,
+                enableRedLine: false,
                 // Если у блока не задан maxWidth, наследуем от epigraph
                 maxWidth: b.maxWidth ?? epigraphMaxWidth,
                 // Если у блока не задано containerAlignment, наследуем от epigraph
