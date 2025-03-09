@@ -147,50 +147,59 @@ class InlineLinkElement extends TextInlineElement {
 /// Отображает изображение, если оно уже загружено.
 class ImageInlineElement extends InlineElement {
   final ui.Image image;
-  final double desiredWidth;
-  final double desiredHeight;
+  final double? desiredWidth;   // может быть null
+  final double? desiredHeight;  // может быть null
   final ImageDisplayMode mode;
 
   ImageInlineElement({
     required this.image,
-    required this.desiredWidth,
-    required this.desiredHeight,
+    this.desiredWidth,
+    this.desiredHeight,
     this.mode = ImageDisplayMode.inline,
   });
 
   @override
   void performLayout(double maxWidth) {
-    // Определяем целевую высоту: не более 100 px.
-    final targetHeight = math.min(desiredHeight, 100.0);
-    // Масштабируем изображение пропорционально.
-    double scale = targetHeight / desiredHeight;
-    double computedWidth = desiredWidth * scale;
-    // Если рассчитанная ширина превышает maxWidth, уменьшаем масштаб.
-    if (computedWidth > maxWidth) {
-      scale = maxWidth / desiredWidth;
-      computedWidth = maxWidth;
-      // Пересчитываем высоту, при этом не превышая 100 px.
-      final scaledHeight = desiredHeight * scale;
-      height = math.min(scaledHeight, 100.0);
-    } else {
-      height = targetHeight;
+    // Исходные размеры картинки
+    final w0 = image.width.toDouble();
+    final h0 = image.height.toDouble();
+    // Определим желаемые размеры (если они указаны).
+    double wTarget = desiredWidth ?? w0;
+    double hTarget = desiredHeight ?? h0;
+
+    // Сохраним пропорции
+    final ratio = w0 / h0;
+
+    // Если пользователь явно указал desiredWidth, но не desiredHeight,
+    // вычислим высоту, сохраняя соотношение.
+    if (desiredWidth != null && desiredHeight == null) {
+      hTarget = wTarget / ratio;
     }
-    width = computedWidth;
-    baseline = height; // baseline равна высоте
+    // Если указал desiredHeight, но не desiredWidth
+    else if (desiredHeight != null && desiredWidth == null) {
+      wTarget = hTarget * ratio;
+    }
+
+    // Теперь впишем в maxWidth (если wTarget слишком большой)
+    if (wTarget > maxWidth) {
+      final scale = maxWidth / wTarget;
+      wTarget = maxWidth;
+      hTarget *= scale;
+    }
+
+    width = wTarget;
+    height = hTarget;
+    baseline = height; // т.к. baseline обычно внизу
   }
 
   @override
-  void paint(ui.Canvas canvas, Offset offset) {
-    final srcRect = Rect.fromLTWH(
-      0,
-      0,
-      image.width.toDouble(),
-      image.height.toDouble(),
-    );
-    final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
+  void paint(ui.Canvas canvas, ui.Offset offset) {
+    final srcRect = ui.Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final dstRect = ui.Rect.fromLTWH(offset.dx, offset.dy, width, height);
     canvas.drawImageRect(image, srcRect, dstRect, Paint());
   }
 }
+
 
 /// Отображает изображение, которое загружается асинхронно.
 class ImageFutureInlineElement extends InlineElement {
@@ -231,11 +240,11 @@ class ImageFutureInlineElement extends InlineElement {
       width = computedWidth;
       height = naturalHeight * scale;
       // На всякий случай гарантируем, что высота не больше 100 px.
-      if (height > 100) {
-        scale = 100 / naturalHeight;
-        width = naturalWidth * scale;
-        height = 100;
-      }
+      // if (height > 100) {
+      //   scale = 100 / naturalHeight;
+      //   width = naturalWidth * scale;
+      //   height = 100;
+      // }
       baseline = height;
     } else {
       width = maxWidth;

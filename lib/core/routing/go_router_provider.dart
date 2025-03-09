@@ -31,7 +31,11 @@ class GoRouterProvider {
                 return NoTransitionPage(
                     child: BlocProvider(
                       create: (context) => ReaderScreenController(getIt()),
-                      child:Scaffold(body: ReaderScreen(),backgroundColor: Colors.white,),
+                      child:Scaffold(body: LayoutBuilder(
+                        builder: (context,size) {
+                          return ReaderScreen(screenSize: size,);
+                        }
+                      ),backgroundColor: Colors.white,),
                     ));
               }),
 

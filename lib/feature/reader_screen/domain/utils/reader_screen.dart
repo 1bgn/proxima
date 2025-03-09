@@ -10,7 +10,8 @@ import 'lazy_chunks_paginator.dart';
 
 class ReaderScreen extends StatefulWidget {
   final int startPage;
-  const ReaderScreen({Key? key, this.startPage = 0}) : super(key: key);
+  final BoxConstraints screenSize;
+  const ReaderScreen({Key? key, this.startPage = 0, required this.screenSize}) : super(key: key);
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -18,7 +19,7 @@ class ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<ReaderScreen> {
   late AssetFB2Loader loader;
-  late LazyChunksPaginator paginator;
+  late OptimizedLazyPaginator paginator;
   bool inited = false;
   int currentPage = 0;
   final PageController pageController = PageController();
@@ -35,16 +36,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
       assetPath: 'assets/book.fb2',
       hyphenator:  Hyphenator(),
     );
-    paginator = LazyChunksPaginator(
+    paginator = OptimizedLazyPaginator(
       loader: loader,
       chunkSize: 100,
       globalMaxWidth: 400,
       lineSpacing: 4,
-      pageHeight: 600,
+      pageHeight: widget.screenSize.maxHeight-86,
       columns: 1,
       columnSpacing: 20,
       allowSoftHyphens: true,
-      lruCapacity: 10,
+      // lruCapacity: 10,
     );
     await paginator.init();
     setState(() {
