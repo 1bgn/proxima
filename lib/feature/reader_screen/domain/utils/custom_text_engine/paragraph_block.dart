@@ -27,6 +27,8 @@ class ParagraphBlock {
   final double? maxWidth;
   final bool isSectionEnd;
   final bool breakable;
+  // Новое свойство: включать ли эффект красной строки
+  final bool enableRedLine;
 
   ParagraphBlock({
     required this.inlineElements,
@@ -38,6 +40,7 @@ class ParagraphBlock {
     this.maxWidth,
     this.isSectionEnd = false,
     this.breakable = false,
+    this.enableRedLine = true, // по умолчанию включено
   });
 
   ParagraphBlock copyWith({
@@ -50,6 +53,7 @@ class ParagraphBlock {
     double? maxWidth,
     bool? isSectionEnd,
     bool? breakable,
+    bool? enableRedLine,
   }) {
     return ParagraphBlock(
       inlineElements: inlineElements ?? this.inlineElements,
@@ -61,6 +65,7 @@ class ParagraphBlock {
       maxWidth: maxWidth ?? this.maxWidth,
       isSectionEnd: isSectionEnd ?? this.isSectionEnd,
       breakable: breakable ?? this.breakable,
+      enableRedLine: enableRedLine ?? this.enableRedLine,
     );
   }
 }

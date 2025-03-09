@@ -56,41 +56,59 @@ class AdvancedLayoutEngine {
     for (int pIndex = 0; pIndex < paragraphs.length; pIndex++) {
       final para = paragraphs[pIndex];
 
-      // Если параграф имеет выравнивание right (например, text-author),
-      // а предыдущий блок не завершён (есть уже хотя бы одна строка),
-      // добавляем пустую строку, чтобы начать с новой строки / нового абзаца.
+      // Если у абзаца задано right-выравнивание и есть предыдущие строки – начинаем с новой строки
       if (para.textAlign == CustomTextAlign.right && allLines.isNotEmpty) {
         allLines.add(LineLayout());
         paragraphIndexOfLine.add(pIndex);
       }
 
-      // Разбиваем конкретный абзац на строки
+      // Разбиваем абзац на строки
       final lines = _layoutSingleParagraph(para);
 
-      // Запоминаем, к какому параграфу относится каждая строка
+      // Если строк меньше минимального количества, добавляем пустые строки
+      if (lines.length < para.minimumLines) {
+        final deficit = para.minimumLines - lines.length;
+        for (int i = 0; i < deficit; i++) {
+          final emptyLine = LineLayout();
+          emptyLine.width = 0;
+          emptyLine.height = lines.isNotEmpty ? lines.last.height : 20;
+          emptyLine.textAlign = para.textAlign ?? globalTextAlign;
+          emptyLine.textDirection = para.textDirection;
+          lines.add(emptyLine);
+        }
+      }
+
+      // Добавляем строки абзаца
       for (int i = 0; i < lines.length; i++) {
         paragraphIndexOfLine.add(pIndex);
       }
       allLines.addAll(lines);
 
-      // Подсчёт общей высоты (упрощённо, если нужно)
+      // Добавляем paragraphSpacing, если это не последний абзац
+      if (pIndex < paragraphs.length - 1 && para.paragraphSpacing > 0) {
+        final spacingLine = LineLayout();
+        spacingLine.width = 0;
+        spacingLine.height = para.paragraphSpacing;
+        spacingLine.textAlign = para.textAlign ?? globalTextAlign;
+        spacingLine.textDirection = para.textDirection;
+        allLines.add(spacingLine);
+        paragraphIndexOfLine.add(pIndex);
+      }
+
+      // Подсчёт общей высоты (опционально, если требуется)
       double paraH = 0.0;
       for (int i = 0; i < lines.length; i++) {
         paraH += lines[i].height;
-        // Добавляем межстрочный интервал, кроме последней строки абзаца
         if (i < lines.length - 1) {
           paraH += lineSpacing;
         }
       }
       totalHeight += paraH;
-
-      // paragraphSpacing – отступ после абзаца (если это не последний абзац)
       if (pIndex < paragraphs.length - 1) {
-        totalHeight += paragraphs[pIndex].paragraphSpacing;
+        totalHeight += para.paragraphSpacing;
       }
     }
 
-    // Возвращаем объект CustomTextLayout, где лежат все строки и вспомогательная информация
     return CustomTextLayout(
       lines: allLines,
       totalHeight: totalHeight,
@@ -98,45 +116,42 @@ class AdvancedLayoutEngine {
     );
   }
 
+
   /// Разбивка одного ParagraphBlock на строки (LineLayout).
   List<LineLayout> _layoutSingleParagraph(ParagraphBlock paragraph) {
     final effectiveWidth = paragraph.maxWidth != null
         ? globalMaxWidth * paragraph.maxWidth!
         : globalMaxWidth;
 
-    // Разбиваем inline-элементы на токены
     final splitted = _splitTokens(paragraph.inlineElements);
     final result = <LineLayout>[];
 
     var currentLine = LineLayout();
     final isRTL = paragraph.textDirection == CustomTextDirection.rtl;
 
-    double firstLineIndent = paragraph.firstLineIndent;
-    double currentX = 0.0; // заполненная ширина строки
+    // Если красная строка отключена, отступ равен 0.
+    double firstLineIndent = paragraph.enableRedLine ? paragraph.firstLineIndent : 0.0;
+    double currentX = 0.0;
     double maxAscent = 0.0;
     double maxDescent = 0.0;
 
-    // Функция для завершения текущей строки
     void commitLine() {
       currentLine.width = currentX;
       currentLine.maxAscent = maxAscent;
       currentLine.maxDescent = maxDescent;
       currentLine.height = maxAscent + maxDescent;
-      // *** Ключевое изменение: присваиваем выравнивание и направление строки ***
       currentLine.textAlign = paragraph.textAlign ?? globalTextAlign;
       currentLine.textDirection = paragraph.textDirection;
       result.add(currentLine);
 
-      // Подготовка новой строки
       currentLine = LineLayout();
       currentX = 0.0;
       maxAscent = 0.0;
       maxDescent = 0.0;
-      // После первой строки отступ сбрасываем
+      // После первой строки отступ сбрасывается независимо от настроек
       firstLineIndent = 0.0;
     }
 
-    // Проходим по всем токенам
     for (final elem in splitted) {
       double availableWidth = effectiveWidth - currentX;
 
@@ -150,7 +165,6 @@ class AdvancedLayoutEngine {
       elem.performLayout(availableWidth);
 
       if (currentX + elem.width > effectiveWidth && currentLine.elements.isNotEmpty) {
-        // Обработка мягкого переноса или переход на новую строку
         if (elem is TextInlineElement && allowSoftHyphens) {
           final splittedPair = _trySplitBySoftHyphen(elem, effectiveWidth - currentX);
           if (splittedPair != null) {
@@ -206,6 +220,8 @@ class AdvancedLayoutEngine {
 
     return result;
   }
+
+
 
 
   /// Шаг 2. Формирование страниц (MultiColumnPagedLayout) с учётом разбиения по секциям:

@@ -259,10 +259,10 @@ class SinglePageRenderObj extends RenderBox {
         // Вычисляем стартовый dx в зависимости от выравнивания
         switch (line.textAlign) {
           case CustomTextAlign.left:
-            dx = isRTL ? (colX + extraSpace) : colX;
+            dx = colX;
             break;
           case CustomTextAlign.right:
-            dx = isRTL ? colX : (colX + extraSpace);
+            dx = colX + extraSpace;
             break;
           case CustomTextAlign.center:
             dx = colX + extraSpace / 2;

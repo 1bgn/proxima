@@ -312,6 +312,7 @@ class AssetFB2Loader {
         return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
           textAlign: CustomTextAlign.left,
           firstLineIndent: 20,
+          enableRedLine: true,
           paragraphSpacing: 15,
         );
       case 'image':
@@ -343,6 +344,7 @@ class AssetFB2Loader {
       case 'title':
         return _parseParagraph(elem, style: StylesConfig.titleFont)?.copyWith(
           textAlign: CustomTextAlign.center,
+
           paragraphSpacing: 15,
         );
       case 'subtitle':
