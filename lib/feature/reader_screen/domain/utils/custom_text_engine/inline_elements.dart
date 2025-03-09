@@ -147,78 +147,75 @@ class InlineLinkElement extends TextInlineElement {
 /// Отображает изображение, если оно уже загружено.
 class ImageInlineElement extends InlineElement {
   final ui.Image image;
-  final double? desiredWidth;   // может быть null
-  final double? desiredHeight;  // может быть null
+  final double desiredWidth;   // «Исходная» (или желаемая) ширина
+  final double desiredHeight;  // «Исходная» (или желаемая) высота
   final ImageDisplayMode mode;
 
   ImageInlineElement({
     required this.image,
-    this.desiredWidth,
-    this.desiredHeight,
+    required this.desiredWidth,
+    required this.desiredHeight,
     this.mode = ImageDisplayMode.inline,
   });
 
   @override
   void performLayout(double maxWidth) {
-    // Исходные размеры картинки
-    final w0 = image.width.toDouble();
-    final h0 = image.height.toDouble();
-    // Определим желаемые размеры (если они указаны).
-    double wTarget = desiredWidth ?? w0;
-    double hTarget = desiredHeight ?? h0;
-
-    // Сохраним пропорции
-    final ratio = w0 / h0;
-
-    // Если пользователь явно указал desiredWidth, но не desiredHeight,
-    // вычислим высоту, сохраняя соотношение.
-    if (desiredWidth != null && desiredHeight == null) {
-      hTarget = wTarget / ratio;
-    }
-    // Если указал desiredHeight, но не desiredWidth
-    else if (desiredHeight != null && desiredWidth == null) {
-      wTarget = hTarget * ratio;
+    // Проверяем, не выходит ли ширина за доступное пространство.
+    // Если ширина больше, уменьшаем пропорционально (сохраняем соотношение сторон).
+    double scale = 1.0;
+    if (desiredWidth > maxWidth) {
+      scale = maxWidth / desiredWidth;
     }
 
-    // Теперь впишем в maxWidth (если wTarget слишком большой)
-    if (wTarget > maxWidth) {
-      final scale = maxWidth / wTarget;
-      wTarget = maxWidth;
-      hTarget *= scale;
-    }
+    width = desiredWidth * scale;
+    height = desiredHeight * scale;
 
-    width = wTarget;
-    height = hTarget;
-    baseline = height; // т.к. baseline обычно внизу
+    // Базовая линия для изображений обычно принимается равной всей высоте.
+    baseline = height;
   }
 
   @override
-  void paint(ui.Canvas canvas, ui.Offset offset) {
-    final srcRect = ui.Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-    final dstRect = ui.Rect.fromLTWH(offset.dx, offset.dy, width, height);
+  void paint(ui.Canvas canvas, Offset offset) {
+    print("FEVWVWEV");
+    final srcRect = Rect.fromLTWH(
+      0,
+      0,
+      image.width.toDouble(),
+      image.height.toDouble(),
+    );
+    final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
     canvas.drawImageRect(image, srcRect, dstRect, Paint());
   }
 }
 
 
+
+
+
+
+
 /// Отображает изображение, которое загружается асинхронно.
+/// Размер картинки вычисляется из её натуральных размеров (из байт-кода).
+/// Если натуральная ширина больше maxWidth, происходит пропорциональное уменьшение.
+/// Если изображение ещё не загружено, используется placeholder с заданной высотой placeholderHeight.
+///
+/// Важно: если перерисовка не происходит автоматически, необходимо в onImageLoaded
+/// инициировать обновление layout родительского элемента (например, вызвать markNeedsLayout() или setState()).
 class ImageFutureInlineElement extends InlineElement {
   final Future<ui.Image> future;
-  final double? desiredWidth;
-  final double? desiredHeight;
-  final double minHeight;
+  final double placeholderHeight; // Высота плейсхолдера до загрузки изображения
   final VoidCallback? onImageLoaded;
   ui.Image? _image;
 
   ImageFutureInlineElement({
     required this.future,
-    this.desiredWidth,
-    this.desiredHeight,
-    required this.minHeight,
+    this.placeholderHeight = 50.0,
     this.onImageLoaded,
   }) {
     future.then((img) {
       _image = img;
+      // Если перерисовка не происходит автоматически,
+      // убедитесь, что onImageLoaded вызывает пересчёт layout (например, markNeedsLayout() или setState()).
       onImageLoaded?.call();
     });
   }
@@ -226,29 +223,22 @@ class ImageFutureInlineElement extends InlineElement {
   @override
   void performLayout(double maxWidth) {
     if (_image != null) {
+      // Получаем натуральные размеры изображения из байт-кода
       final naturalWidth = _image!.width.toDouble();
       final naturalHeight = _image!.height.toDouble();
-      // Целевая высота не более 100 px.
-      final targetHeight = math.min(naturalHeight, 100.0);
-      double scale = targetHeight / naturalHeight;
-      double computedWidth = naturalWidth * scale;
-      // Если рассчитанная ширина превышает maxWidth, корректируем масштаб.
-      if (computedWidth > maxWidth) {
+
+      // Если натуральная ширина больше доступного пространства, уменьшаем пропорционально
+      double scale = 1.0;
+      if (naturalWidth > maxWidth) {
         scale = maxWidth / naturalWidth;
-        computedWidth = maxWidth;
       }
-      width = computedWidth;
+      width = naturalWidth * scale;
       height = naturalHeight * scale;
-      // На всякий случай гарантируем, что высота не больше 100 px.
-      // if (height > 100) {
-      //   scale = 100 / naturalHeight;
-      //   width = naturalWidth * scale;
-      //   height = 100;
-      // }
       baseline = height;
     } else {
+      // Пока изображение не загружено, резервируем место по ширине = maxWidth и заданной placeholderHeight
       width = maxWidth;
-      height = minHeight;
+      height = placeholderHeight;
       baseline = height;
     }
   }
@@ -265,6 +255,7 @@ class ImageFutureInlineElement extends InlineElement {
       final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
       canvas.drawImageRect(_image!, srcRect, dstRect, Paint());
     } else {
+      // Рисуем placeholder, пока изображение не загружено
       final placeholderPaint = Paint()..color = Colors.grey.shade300;
       final rect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
       canvas.drawRect(rect, placeholderPaint);

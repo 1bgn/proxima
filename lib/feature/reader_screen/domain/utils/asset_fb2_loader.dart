@@ -28,13 +28,51 @@ class SectionBreakInlineElement extends InlineElement {
   }
 }
 
-/// Пример FB2-парсера:
-/// - Загружает и парсит весь документ целиком.
-/// - Параметр chunkSize больше не влияет на разрывы страниц.
-///   Он используется только для ленивой выдачи абзацев при необходимости (например, подгрузка экранами).
-/// - Для элементов <title>, <subtitle> и <text-author> каждый вложенный <p>
-///   обрабатывается как отдельный ParagraphBlock, причем для <text-author>
-///   дополнительно устанавливается выравнивание по правой стороне.
+/// Inline-элемент для изображений, который использует уже декодированное ui.Image
+/// для вычисления итоговых размеров на основе натуральных размеров изображения.
+class ImageInlineElement extends InlineElement {
+  final ui.Image image;
+  final double desiredWidth;
+  final double desiredHeight;
+  final ImageDisplayMode mode;
+
+  ImageInlineElement({
+    required this.image,
+    required this.desiredWidth,
+    required this.desiredHeight,
+    this.mode = ImageDisplayMode.inline,
+  });
+
+  @override
+  void performLayout(double maxWidth) {
+    double scale = 1.0;
+    if (desiredWidth > maxWidth) {
+      scale = maxWidth / desiredWidth;
+    }
+    width = desiredWidth * scale;
+    height = desiredHeight * scale;
+    baseline = height;
+  }
+
+  @override
+  void paint(ui.Canvas canvas, Offset offset) {
+    final srcRect = Rect.fromLTWH(
+      0,
+      0,
+      image.width.toDouble(),
+      image.height.toDouble(),
+    );
+    final dstRect = Rect.fromLTWH(offset.dx, offset.dy, width, height);
+    canvas.drawImageRect(image, srcRect, dstRect, Paint());
+  }
+}
+
+/// Пример FB2-парсера, который:
+/// • Загружает и парсит весь документ целиком.
+/// • Для элементов <title>, <subtitle> и <text-author> каждый вложенный <p>
+///   обрабатывается как отдельный ParagraphBlock (для text-author – выравнивание по правой стороне).
+/// • Все бинарные данные (изображения) декодируются заранее и сохраняются в _decodedImages,
+///   что позволяет сразу вычислять итоговые размеры изображений.
 class AssetFB2Loader {
   final String assetPath;
   final Hyphenator hyphenator;
@@ -42,15 +80,15 @@ class AssetFB2Loader {
   bool _initialized = false;
   String? _fb2Content;
   final List<ParagraphBlock> _allParagraphs = [];
-  final Map<String, Future<ui.Image>> _imageCache = {};
+  // Храним уже декодированные изображения.
+  final Map<String, ui.Image> _decodedImages = {};
 
   AssetFB2Loader({
     required this.assetPath,
     required this.hyphenator,
   });
 
-  /// Инициализация: грузим весь FB2, парсим и сохраняем абзацы.
-  /// Параметр chunkSize не участвует в layout.
+  /// Инициализация: загружаем FB2, декодируем бинарные данные и сохраняем абзацы.
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
@@ -58,9 +96,10 @@ class AssetFB2Loader {
     _fb2Content = await rootBundle.loadString(assetPath);
     final doc = XmlDocument.parse(_fb2Content!);
 
-    _parseBinaries(doc);
+    // Декодируем все бинарные данные (изображения)
+    await _parseBinaries(doc);
 
-    // Рекурсивно обходим все элементы <body>
+    // Рекурсивно обходим все элементы <body> и строим абзацы
     final bodies = doc.findAllElements('body');
     for (final body in bodies) {
       _processNode(body);
@@ -86,14 +125,15 @@ class AssetFB2Loader {
     return _allParagraphs.sublist(start, end);
   }
 
-  void _parseBinaries(XmlDocument doc) {
+  Future<void> _parseBinaries(XmlDocument doc) async {
     final binaries = doc.findAllElements('binary');
     for (final bin in binaries) {
       final id = bin.getAttribute('id');
       if (id == null) continue;
       final b64 = bin.text.trim();
       final data = base64.decode(b64);
-      _imageCache[id] = _decodeImage(data);
+      final image = await _decodeImage(data);
+      _decodedImages[id] = image;
     }
   }
 
@@ -110,22 +150,18 @@ class AssetFB2Loader {
   }
 
   /// Рекурсивный обход тегов FB2.
-  /// При встрече секции обрабатываем её содержимое, а затем добавляем
-  /// маркер конца секции (ParagraphBlock с isSectionEnd == true).
+  /// Для тега <section> обрабатываем содержимое, затем добавляем маркер конца секции.
   void _processNode(XmlNode node) {
     if (node is XmlText) {
-      // Пустые текстовые узлы игнорируем
       if (node.text.trim().isEmpty) return;
     } else if (node is XmlComment) {
       return;
     } else if (node is XmlElement) {
       final tag = node.name.local.toLowerCase();
       if (tag == 'section') {
-        // Обрабатываем содержимое секции
         for (final child in node.children) {
           _processNode(child);
         }
-        // Добавляем маркер конца секции с использованием SectionBreakInlineElement
         _allParagraphs.add(ParagraphBlock(
           inlineElements: [SectionBreakInlineElement()],
           isSectionEnd: true,
@@ -138,14 +174,11 @@ class AssetFB2Loader {
           breakable: false,
         ));
       } else if (_isBlockElement(tag)) {
-        // Для блочных элементов, таких как <p>, <title>, <subtitle>, <text-author>:
-        // Если элемент содержит несколько <p>, обрабатываем каждый отдельно.
         final blocks = _parseBlockOrMulti(elem: node);
         for (final b in blocks) {
           _allParagraphs.add(b);
         }
       } else {
-        // Рекурсивный обход дочерних узлов
         for (final child in node.children) {
           _processNode(child);
         }
@@ -169,15 +202,14 @@ class AssetFB2Loader {
   }
 
   /// Если элемент содержит несколько <p> (например, <title>, <subtitle>, <text-author>),
-  /// то возвращаем список ParagraphBlock, по одному для каждого <p>.
-  /// Если вложенных <p> нет, возвращаем один блок.
+  /// возвращаем ParagraphBlock для каждого <p>.
+  /// Если вложенных <p> нет, для text-author дополнительно проверяем, есть ли текстовое содержимое.
   List<ParagraphBlock> _parseBlockOrMulti({required XmlElement elem}) {
     final tag = elem.name.local.toLowerCase();
     final pElements = elem.findElements('p').toList();
     if (pElements.isNotEmpty) {
       final result = <ParagraphBlock>[];
       for (final p in pElements) {
-        // Для text-author устанавливаем выравнивание вправо.
         CustomTextAlign align = (tag == 'text-author')
             ? CustomTextAlign.right
             : (tag == 'title' || tag == 'subtitle')
@@ -185,7 +217,7 @@ class AssetFB2Loader {
             : CustomTextAlign.left;
         final block = _parseParagraph(p, style: _decideStyleFor(tag))?.copyWith(
           textAlign: align,
-          firstLineIndent: (tag == 'p') ? 20 : 0,
+          firstLineIndent: (tag == 'p') ? 20 : (tag == 'text-author' ? 0 : 0),
           paragraphSpacing: 15,
         );
         if (block != null) {
@@ -194,12 +226,29 @@ class AssetFB2Loader {
       }
       return result;
     } else {
+      // Если тег text-author не содержит <p>, но имеет текстовое содержимое, создаем блок из него.
+      if (tag == 'text-author' && elem.text.trim().isNotEmpty) {
+
+        final inline = TextInlineElement(elem.text.trim(), _decideStyleFor(tag));
+        return [
+          ParagraphBlock(
+            inlineElements: [inline],
+            textAlign: CustomTextAlign.right,
+            textDirection: CustomTextDirection.ltr,
+            firstLineIndent: 0,
+            paragraphSpacing: 15,
+            minimumLines: 1,
+            maxWidth: null,
+            isSectionEnd: false,
+            breakable: false,
+          )
+        ];
+      }
       // Если нет вложенных <p>, обрабатываем элемент как единый блок.
       return [_parseBlock(elem)!];
     }
   }
 
-  /// Выбор стиля в зависимости от тега.
   TextStyle _decideStyleFor(String tag) {
     switch (tag) {
       case 'title':
@@ -207,13 +256,13 @@ class AssetFB2Loader {
       case 'subtitle':
         return StylesConfig.subtitleFont;
       case 'text-author':
-        return StylesConfig.baseText; // можно задать отдельный стиль для автора
+        return StylesConfig.authorFont;
       default:
         return StylesConfig.baseText;
     }
   }
 
-  /// Обрабатывает элемент как единый блок (если он не содержит вложенных <p>).
+  /// Обрабатывает элемент как единый блок (если не содержит вложенных <p>).
   ParagraphBlock? _parseBlock(XmlElement elem) {
     final tag = elem.name.local.toLowerCase();
     switch (tag) {
@@ -240,9 +289,9 @@ class AssetFB2Loader {
       case 'epigraph':
         return _parseParagraph(elem, style: StylesConfig.epigraph)?.copyWith(breakable: true);
       case 'text-author':
-        return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
+        return _parseParagraph(elem, style: StylesConfig.authorFont)?.copyWith(
           textAlign: CustomTextAlign.right,
-          firstLineIndent: 20,
+          firstLineIndent: 0,
           paragraphSpacing: 15,
         );
       case 'title':
@@ -263,24 +312,24 @@ class AssetFB2Loader {
     }
   }
 
+  /// Основная логика обработки элемента как абзаца.
+  /// Для тега <image> извлекаем изображение из _decodedImages и создаём ImageInlineElement.
   ParagraphBlock? _parseParagraph(XmlElement elem, {TextStyle? style}) {
     final inlines = <InlineElement>[];
     final baseStyle = style ?? StylesConfig.baseText;
 
-    // Если элемент является <image> без дочерних элементов.
     if (elem.name.local.toLowerCase() == 'image' && elem.children.isEmpty) {
       final href = elem.getAttribute('l:href') ??
           elem.getAttribute('xlink:href') ??
           elem.getAttribute('href');
       if (href != null && href.startsWith('#')) {
         final id = href.substring(1);
-        if (_imageCache.containsKey(id)) {
-          final fut = _imageCache[id]!;
-          inlines.add(ImageFutureInlineElement(
-            future: fut,
-            desiredWidth: null,
-            desiredHeight: null,
-            minHeight: 100,
+        if (_decodedImages.containsKey(id)) {
+          final image = _decodedImages[id]!;
+          inlines.add(ImageInlineElement(
+            image: image,
+            desiredWidth: image.width.toDouble(),
+            desiredHeight: image.height.toDouble(),
           ));
         }
       }
@@ -310,13 +359,12 @@ class AssetFB2Loader {
                 node.getAttribute('href');
             if (href != null && href.startsWith('#')) {
               final id = href.substring(1);
-              if (_imageCache.containsKey(id)) {
-                final fut = _imageCache[id]!;
-                inlines.add(ImageFutureInlineElement(
-                  future: fut,
-                  desiredWidth: null,
-                  desiredHeight: null,
-                  minHeight: 100,
+              if (_decodedImages.containsKey(id)) {
+                final image = _decodedImages[id]!;
+                inlines.add(ImageInlineElement(
+                  image: image,
+                  desiredWidth: image.width.toDouble(),
+                  desiredHeight: image.height.toDouble(),
                 ));
               }
             }
