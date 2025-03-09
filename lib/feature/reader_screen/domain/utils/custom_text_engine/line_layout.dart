@@ -11,33 +11,23 @@ import 'inline_elements.dart';
 import 'inline_elements.dart';
 
 
-
 class LineLayout {
-  // Внутренние inline-элементы, которые составляют строку
   List<InlineElement> elements = [];
-
-  // Общая ширина и высота строки
   double width = 0;
   double height = 0;
-
-  // Асцент/десцент для вычисления baseline
   double maxAscent = 0;
   double maxDescent = 0;
-
-  // Признак конца секции (если нужно отделить особой логикой)
   bool isSectionEnd = false;
-
-  // Добавим поля для выравнивания:
   CustomTextAlign textAlign = CustomTextAlign.left;
   CustomTextDirection textDirection = CustomTextDirection.ltr;
+  // Новое свойство для хранения коэффициента контейнерного смещения
+  double containerOffset = 0;
+  double containerOffsetFactor = 1.0; // По умолчанию 1.0 (то есть весь доступный width)
 
-  // Удобный геттер
   double get baseline => maxAscent;
 
-  // Конструктор по умолчанию (если нужно)
   LineLayout();
 
-  // Можем добавить конструктор с инициализацией
   LineLayout.withParams({
     required this.elements,
     required this.width,
@@ -47,9 +37,10 @@ class LineLayout {
     this.isSectionEnd = false,
     this.textAlign = CustomTextAlign.left,
     this.textDirection = CustomTextDirection.ltr,
+    this.containerOffset = 0,
+    this.containerOffsetFactor = 1.0,
   });
 
-  // Метод-копия, если нужен
   LineLayout copyWith({
     List<InlineElement>? elements,
     double? width,
@@ -59,6 +50,8 @@ class LineLayout {
     bool? isSectionEnd,
     CustomTextAlign? textAlign,
     CustomTextDirection? textDirection,
+    double? containerOffset,
+    double? containerOffsetFactor,
   }) {
     return LineLayout.withParams(
       elements: elements ?? this.elements,
@@ -69,9 +62,12 @@ class LineLayout {
       isSectionEnd: isSectionEnd ?? this.isSectionEnd,
       textAlign: textAlign ?? this.textAlign,
       textDirection: textDirection ?? this.textDirection,
+      containerOffset: containerOffset ?? this.containerOffset,
+      containerOffsetFactor: containerOffsetFactor ?? this.containerOffsetFactor,
     );
   }
 }
+
 
 
 

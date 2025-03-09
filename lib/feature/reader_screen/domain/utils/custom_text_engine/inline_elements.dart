@@ -143,6 +143,23 @@ class InlineLinkElement extends TextInlineElement {
     }
   }
 }
+class IndentInlineElement extends InlineElement {
+  final double indentWidth;
+  IndentInlineElement({required this.indentWidth});
+
+  @override
+  void performLayout(double maxWidth) {
+    width = indentWidth;
+    height = 0;
+    baseline = 0;
+    selectionRects = [];
+  }
+
+  @override
+  void paint(ui.Canvas canvas, Offset offset) {
+    // Ничего не рисуем – это невидимый отступ.
+  }
+}
 
 /// Отображает изображение, если оно уже загружено.
 class ImageInlineElement extends InlineElement {

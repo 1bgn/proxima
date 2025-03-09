@@ -129,11 +129,21 @@ class AdvancedLayoutEngine {
     var currentLine = LineLayout();
     final isRTL = paragraph.textDirection == CustomTextDirection.rtl;
 
-    // Если красная строка отключена, отступ равен 0.
-    double firstLineIndent = paragraph.enableRedLine ? paragraph.firstLineIndent : 0.0;
+    // Переменные, используемые в функции, должны быть объявлены раньше
     double currentX = 0.0;
     double maxAscent = 0.0;
     double maxDescent = 0.0;
+    bool isFirstLine = true;
+
+    // Функция для применения отступа первой строки (красная строка)
+    void applyIndentIfNeeded() {
+      if (isFirstLine && !isRTL && paragraph.enableRedLine && paragraph.firstLineIndent > 0) {
+        final indentElem = IndentInlineElement(indentWidth: paragraph.firstLineIndent);
+        indentElem.performLayout(paragraph.firstLineIndent);
+        currentLine.elements.add(indentElem);
+        currentX += paragraph.firstLineIndent;
+      }
+    }
 
     void commitLine() {
       currentLine.width = currentX;
@@ -142,26 +152,44 @@ class AdvancedLayoutEngine {
       currentLine.height = maxAscent + maxDescent;
       currentLine.textAlign = paragraph.textAlign ?? globalTextAlign;
       currentLine.textDirection = paragraph.textDirection;
-      result.add(currentLine);
 
+      if (paragraph.maxWidth != null && paragraph.containerAlignment != null) {
+        final effectiveWidth = globalMaxWidth * paragraph.maxWidth!;
+        final extra = globalMaxWidth - effectiveWidth;
+        switch (paragraph.containerAlignment!) {
+          case CustomTextAlign.right:
+            currentLine.containerOffset = extra; // сдвигаем весь блок вправо
+            break;
+          case CustomTextAlign.center:
+            currentLine.containerOffset = extra / 2;
+            break;
+          default: // left, justify
+            currentLine.containerOffset = 0;
+            break;
+        }
+        // Дополнительно сохраняем фактор, чтобы при отрисовке знать, какой ширины блок
+        currentLine.containerOffsetFactor = paragraph.maxWidth!;
+      } else {
+        currentLine.containerOffset = 0;
+        currentLine.containerOffsetFactor = 1.0;
+      }
+
+      result.add(currentLine);
       currentLine = LineLayout();
       currentX = 0.0;
       maxAscent = 0.0;
       maxDescent = 0.0;
-      // После первой строки отступ сбрасывается независимо от настроек
-      firstLineIndent = 0.0;
+      isFirstLine = false;
     }
+
+
+
+
+    // Применяем отступ для первой строки, если нужно
+    applyIndentIfNeeded();
 
     for (final elem in splitted) {
       double availableWidth = effectiveWidth - currentX;
-
-      if (!isRTL && currentLine.elements.isEmpty && firstLineIndent > 0) {
-        currentX += firstLineIndent;
-        availableWidth -= firstLineIndent;
-      } else if (isRTL && currentLine.elements.isEmpty && firstLineIndent > 0) {
-        availableWidth -= firstLineIndent;
-      }
-
       elem.performLayout(availableWidth);
 
       if (currentX + elem.width > effectiveWidth && currentLine.elements.isNotEmpty) {
@@ -220,6 +248,8 @@ class AdvancedLayoutEngine {
 
     return result;
   }
+
+
 
 
 

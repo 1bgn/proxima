@@ -25,49 +25,60 @@ class ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<ReaderScreen> {
   late AssetFB2Loader loader;
-  late OptimizedLazyPaginator paginator;
+  OptimizedLazyPaginator? paginator; // делаем paginator опциональным
   bool inited = false;
   int currentPage = 0;
   final PageController pageController = PageController();
   final TextEditingController pageFieldController = TextEditingController();
 
+  // Для отслеживания предыдущих ограничений
+  BoxConstraints? lastConstraints;
+
   @override
   void initState() {
     super.initState();
-    _initAll();
+    _initLoader();
   }
 
-  Future<void> _initAll() async {
+  Future<void> _initLoader() async {
     loader = AssetFB2Loader(
-      assetPath: 'assets/book.fb2',
+      assetPath: 'assets/book2.fb2',
       hyphenator: Hyphenator(),
     );
-
-    paginator = OptimizedLazyPaginator(
-      loader: loader,
-      chunkSize: 200,
-      globalMaxWidth: 400,
-      lineSpacing: 4,
-      pageHeight: widget.screenSize.maxHeight - 86,
-      columns: 1,
-      columnSpacing: 20,
-      allowSoftHyphens: true,
-    );
-
     await loader.init();
-    await paginator.init();
-
     setState(() {
       inited = true;
       currentPage = widget.startPage;
       pageFieldController.text = '$currentPage';
     });
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (pageController.hasClients) {
         pageController.jumpToPage(currentPage);
       }
     });
+  }
+
+  // Метод обновляет (создаёт новый) paginator при изменении ограничений
+  Future<void> _updatePaginator(BoxConstraints constraints) async {
+    if (lastConstraints == null ||
+        lastConstraints!.maxWidth != constraints.maxWidth ||
+        lastConstraints!.maxHeight != constraints.maxHeight) {
+      lastConstraints = constraints;
+      final newPaginator = OptimizedLazyPaginator(
+        loader: loader,
+        chunkSize: 200,
+        globalMaxWidth: constraints.maxWidth,
+        lineSpacing: 4,
+        pageHeight: constraints.maxHeight,
+        columns: 1,
+        columnSpacing: 20,
+        allowSoftHyphens: true,
+      );
+      await newPaginator.init();
+      setState(() {
+        paginator = newPaginator;
+      });
+    }
   }
 
   void _gotoPage(int page) {
@@ -83,6 +94,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!inited) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('FB2 Reader'),
@@ -111,43 +127,48 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
         ],
       ),
-      body: !inited
-          ? const Center(child: CircularProgressIndicator())
-          : LayoutBuilder(
-        builder: (ctx, constraints) {
-          paginator.globalMaxWidth = constraints.maxWidth;
-          paginator.pageHeight = constraints.maxHeight;
-          return PageView.builder(
-            controller: pageController,
-            onPageChanged: (index) {
-              setState(() {
-                currentPage = index;
-                pageFieldController.text = '$index';
-              });
-            },
-            itemBuilder: (ctx, index) {
-              return FutureBuilder(
-                future: paginator.getPage(index),
-                builder: (ctx, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  final page = snapshot.data as MultiColumnPage;
-
-                  return SinglePageView(
-                    page: page,
-                    lineSpacing: paginator.lineSpacing,
-                    allowSoftHyphens: paginator.allowSoftHyphens,
-                  );
-                },
-              );
-            },
-          );
-        },
+      body: Container(
+        padding: EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            _updatePaginator(constraints);
+            if (paginator == null) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            // Оборачиваем PageView.builder в Padding
+            return PageView.builder(
+              controller: pageController,
+              onPageChanged: (index) {
+                setState(() {
+                  currentPage = index;
+                  pageFieldController.text = '$index';
+                });
+              },
+              itemBuilder: (context, index) {
+                return FutureBuilder(
+                  future: paginator!.getPage(index),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final page = snapshot.data as MultiColumnPage;
+                    return SinglePageView(
+                      page: page,
+                      lineSpacing: paginator!.lineSpacing,
+                      allowSoftHyphens: paginator!.allowSoftHyphens,
+                    );
+                  },
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }
 }
+
+
 
 /// Кастомный виджет для рендера одной "страницы".
 class SinglePageView extends LeafRenderObjectWidget {
@@ -232,67 +253,89 @@ class SinglePageRenderObj extends RenderBox {
 
     for (int colIndex = 0; colIndex < _page.columns.length; colIndex++) {
       final colLines = _page.columns[colIndex];
+      // базовая координата колонки
       final colX = offset.dx + colIndex * (colWidth + spacing);
       double dy = offset.dy;
 
       for (int lineI = 0; lineI < colLines.length; lineI++) {
-        final line = colLines[lineI]; // line is LineLayout
+        final line = colLines[lineI];
         final lineTop = dy;
-        double dx = colX;
+        double dx;
 
-        final extraSpace = colWidth - line.width;
+        // Если для этого блока задан containerAlignment (то есть, его абзац имел maxWidth),
+        // вычисляем effectiveWidth и containerLeft.
+        if (line.containerOffset != 0) {
+          // Предполагается, что если containerOffset != 0,
+          // то в ParagraphBlock был задан maxWidth, и effectiveWidth = globalMaxWidth * maxWidth.
+          // Здесь globalMaxWidth (или colWidth) – полная ширина, а effectiveWidth – ширина контейнера.
+          final effectiveWidth = colWidth * line.containerOffsetFactor;
+          // Для right: контейнерный левый край = colX + (colWidth - effectiveWidth)
+          final containerLeft = colX + (colWidth - effectiveWidth);
+          switch (line.textAlign) {
+            case CustomTextAlign.left:
+              dx = containerLeft;
+              break;
+            case CustomTextAlign.right:
+              dx = containerLeft + (effectiveWidth - line.width);
+              break;
+            case CustomTextAlign.center:
+              dx = containerLeft + (effectiveWidth - line.width) / 2;
+              break;
+            case CustomTextAlign.justify:
+              dx = containerLeft;
+              break;
+          }
+        } else {
+          // Если нет containerAlignment (то есть блок занимает всю ширину),
+          // рассчитываем dx по обычной схеме:
+          final extraSpace = colWidth - line.width;
+          final isRTL = (line.textDirection == CustomTextDirection.rtl);
+          switch (line.textAlign) {
+            case CustomTextAlign.left:
+              dx = isRTL ? (colX + extraSpace) : colX;
+              break;
+            case CustomTextAlign.right:
+              dx = isRTL ? colX : (colX + extraSpace);
+              break;
+            case CustomTextAlign.center:
+              dx = colX + extraSpace / 2;
+              break;
+            case CustomTextAlign.justify:
+              dx = colX;
+              break;
+          }
+        }
+
+        // Отрисовка inline-элементов строки с учетом justify
         int gapCount = 0;
-
-        // Только если justify
         if (line.textAlign == CustomTextAlign.justify && line.elements.length > 1) {
-          for (int e = 0; e < line.elements.length - 1; e++) {
-            final e1 = line.elements[e];
-            final e2 = line.elements[e + 1];
+          for (int i = 0; i < line.elements.length - 1; i++) {
+            final e1 = line.elements[i];
+            final e2 = line.elements[i + 1];
             if (e1 is TextInlineElement && e2 is TextInlineElement) {
               gapCount++;
             }
           }
         }
 
-        final isRTL = (line.textDirection == CustomTextDirection.rtl);
-
-        // Вычисляем стартовый dx в зависимости от выравнивания
-        switch (line.textAlign) {
-          case CustomTextAlign.left:
-            dx = colX;
-            break;
-          case CustomTextAlign.right:
-            dx = colX + extraSpace;
-            break;
-          case CustomTextAlign.center:
-            dx = colX + extraSpace / 2;
-            break;
-          case CustomTextAlign.justify:
-            dx = colX;
-            break;
-        }
-
-        for (int e = 0; e < line.elements.length; e++) {
-          final elem = line.elements[e];
+        for (int eIndex = 0; eIndex < line.elements.length; eIndex++) {
+          final elem = line.elements[eIndex];
           final baselineShift = line.baseline - elem.baseline;
           final elemOffset = Offset(dx, lineTop + baselineShift);
 
-          double gapExtra = 0;
+          double gapExtra = 0.0;
           if (line.textAlign == CustomTextAlign.justify &&
               gapCount > 0 &&
-              e < line.elements.length - 1) {
-            final nextElem = line.elements[e + 1];
+              eIndex < line.elements.length - 1) {
+            final nextElem = line.elements[eIndex + 1];
             if (elem is TextInlineElement && nextElem is TextInlineElement) {
-              gapExtra = extraSpace / gapCount;
+              gapExtra = (colWidth - line.width) / gapCount;
             }
           }
 
           elem.paint(canvas, elemOffset);
-
-          // Если RTL — двигаем dx влево, если LTR — вправо
-          dx += isRTL ? -(elem.width + gapExtra) : (elem.width + gapExtra);
+          dx += elem.width + gapExtra;
         }
-
         dy += line.height;
         if (lineI < colLines.length - 1) {
           dy += _lineSpacing;
@@ -300,5 +343,7 @@ class SinglePageRenderObj extends RenderBox {
       }
     }
   }
+
+
 }
 

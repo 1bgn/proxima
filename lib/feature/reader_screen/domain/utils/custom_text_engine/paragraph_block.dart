@@ -24,11 +24,12 @@ class ParagraphBlock {
   final double firstLineIndent;
   final double paragraphSpacing;
   final int minimumLines;
-  final double? maxWidth;
+  final double? maxWidth; // если задан, то считается, что блок занимает globalMaxWidth * maxWidth
   final bool isSectionEnd;
   final bool breakable;
-  // Новое свойство: включать ли эффект красной строки
   final bool enableRedLine;
+  // Новое свойство для выравнивания всего блока в контейнере
+  final CustomTextAlign? containerAlignment;
 
   ParagraphBlock({
     required this.inlineElements,
@@ -40,7 +41,8 @@ class ParagraphBlock {
     this.maxWidth,
     this.isSectionEnd = false,
     this.breakable = false,
-    this.enableRedLine = true, // по умолчанию включено
+    this.enableRedLine = true,
+    this.containerAlignment, // если не задано, по умолчанию считается left
   });
 
   ParagraphBlock copyWith({
@@ -54,6 +56,7 @@ class ParagraphBlock {
     bool? isSectionEnd,
     bool? breakable,
     bool? enableRedLine,
+    CustomTextAlign? containerAlignment,
   }) {
     return ParagraphBlock(
       inlineElements: inlineElements ?? this.inlineElements,
@@ -66,8 +69,7 @@ class ParagraphBlock {
       isSectionEnd: isSectionEnd ?? this.isSectionEnd,
       breakable: breakable ?? this.breakable,
       enableRedLine: enableRedLine ?? this.enableRedLine,
+      containerAlignment: containerAlignment ?? this.containerAlignment,
     );
   }
 }
-
-

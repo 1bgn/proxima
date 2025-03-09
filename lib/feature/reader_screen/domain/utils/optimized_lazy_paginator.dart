@@ -1,21 +1,13 @@
-// optimized_lazy_paginator.dart
 import 'asset_fb2_loader.dart';
 import 'custom_text_engine/line_layout.dart';
 import 'custom_text_engine/paragraph_block.dart';
-
-import 'dart:math' as math;
-
 import 'custom_text_engine/text_layout_engine.dart';
 
-/// Оптимизированный ленивый пагинатор, который:
-/// 1) Загружает весь документ (loadAllParagraphs) для формирования
-///    глобальной раскладки строк (CustomTextLayout), без зависимости от chunkSize.
-/// 2) На основе строк формирует массив offsets (начало каждой страницы).
-/// 3) При запросе getPage(...) быстро выдаёт нужную страницу, уже не завися от chunkSize.
 class OptimizedLazyPaginator {
   final AssetFB2Loader loader;
-  final int chunkSize; // используется только для UI, а не для вычисления разрывов страниц
+  final int chunkSize;
   CustomTextLayout? get fullLayout => _fullLayout;
+
   double globalMaxWidth;
   double lineSpacing;
   double pageHeight;
@@ -40,40 +32,46 @@ class OptimizedLazyPaginator {
     required this.allowSoftHyphens,
   });
 
-  /// Инициализация: грузим полный документ, строим одноколоночный layout,
-  /// рассчитываем offsets страниц. chunkSize не используется для расчёта разрывов.
   Future<void> init() async {
     if (_inited) return;
     _inited = true;
 
-    // Загружаем все абзацы (весь документ)
+    // Загружаем все абзацы
     _allParagraphs = await loader.loadAllParagraphs();
+    // Первоначальный layout
+    await _buildLayout();
+  }
 
-    // Строим одноколоночный layout
+  /// Метод, который пересчитывает layout (например, при изменении размеров).
+  Future<void> relayout() async {
+    // Если ещё не загружены абзацы, выходим
+    if (_allParagraphs == null) return;
+    await _buildLayout();
+  }
+
+  Future<void> _buildLayout() async {
     final engine = AdvancedLayoutEngine(
       paragraphs: _allParagraphs!,
       globalMaxWidth: globalMaxWidth,
       lineSpacing: lineSpacing,
       globalTextAlign: CustomTextAlign.left, // упрощённо
       allowSoftHyphens: allowSoftHyphens,
-      columns: 1,
-      columnSpacing: 0,
+      columns: columns,
+      columnSpacing: columnSpacing,
       pageHeight: pageHeight,
     );
+    // Разбиваем на строки (без формирования мультистраничной структуры)
     _fullLayout = engine.layoutParagraphsOnly();
-
-    // Рассчитываем глобальные offsets
+    // Рассчитываем страницы на основе строк
     _pageOffsets = _buildPageOffsets(_fullLayout!.lines, _fullLayout!.paragraphIndexOfLine, _allParagraphs!);
     _totalPages = _pageOffsets!.length;
   }
 
   int get totalPages => _totalPages;
 
-  /// Возвращает страницу (MultiColumnPage) с columns>1, используя нужный фрагмент строк.
   Future<MultiColumnPage> getPage(int pageIndex) async {
-    await init();
-    if (pageIndex<0 || pageIndex>= _totalPages) {
-      // пустая страница
+    // Если ещё не были загружены данные
+    if (!_inited || _fullLayout == null || _pageOffsets == null) {
       return MultiColumnPage(
         columns: [],
         pageWidth: globalMaxWidth,
@@ -82,20 +80,28 @@ class OptimizedLazyPaginator {
         columnSpacing: columnSpacing,
       );
     }
+
+    if (pageIndex < 0 || pageIndex >= _totalPages) {
+      return MultiColumnPage(
+        columns: [],
+        pageWidth: globalMaxWidth,
+        pageHeight: pageHeight,
+        columnWidth: 10,
+        columnSpacing: columnSpacing,
+      );
+    }
+
     final start = _pageOffsets![pageIndex];
-    final end = (pageIndex == _totalPages-1)
+    final end = (pageIndex == _totalPages - 1)
         ? _fullLayout!.lines.length
-        : _pageOffsets![pageIndex+1];
+        : _pageOffsets![pageIndex + 1];
     final linesForPage = _fullLayout!.lines.sublist(start, end);
 
     return _buildMultiColumnPage(linesForPage);
   }
 
-  /// Реальная логика формирования offsets.
-  /// Пробегаем строки, учитываем height + lineSpacing, если превышает pageHeight – новая страница.
-  /// Также если строка принадлежит абзацу isSectionEnd и сама строка пустая (width=0, height=0),
-  /// форсируем разрыв.
-  List<int> _buildPageOffsets(List<LineLayout> lines, List<int> pIndex, List<ParagraphBlock> paras) {
+  List<int> _buildPageOffsets(
+      List<LineLayout> lines, List<int> pIndex, List<ParagraphBlock> paras) {
     final result = <int>[];
     if (lines.isEmpty) {
       result.add(0);
@@ -103,30 +109,28 @@ class OptimizedLazyPaginator {
     }
     int curLine = 0;
     double used = 0.0;
-    result.add(0); // первая страница – с 0
+    result.add(0);
 
-    for (int i=0; i<lines.length; i++) {
+    for (int i = 0; i < lines.length; i++) {
       final line = lines[i];
       final lh = line.height;
-      if (i==curLine) {
+      if (i == curLine) {
         used = lh;
       } else {
         final need = used + lineSpacing + lh;
         if (need <= pageHeight) {
           used = need;
         } else {
-          // Перенос на новую страницу
           curLine = i;
           result.add(curLine);
           used = lh;
         }
       }
-      // Проверяем конец секции
+      // проверка на конец секции
       final paraIdx = pIndex[i];
-      if (paraIdx>=0 && paraIdx<paras.length) {
-        if (paras[paraIdx].isSectionEnd && line.width==0 && line.height==0) {
-          // форсированный разрыв
-          if (i!=0) {
+      if (paraIdx >= 0 && paraIdx < paras.length) {
+        if (paras[paraIdx].isSectionEnd && line.width == 0 && line.height == 0) {
+          if (i != 0) {
             curLine = i;
             result.add(curLine);
             used = 0;
@@ -137,30 +141,27 @@ class OptimizedLazyPaginator {
     return result;
   }
 
-  /// Строим одну страницу (MultiColumnPage) из переданного списка строк (linesForPage).
   MultiColumnPage _buildMultiColumnPage(List<LineLayout> lines) {
-    final totalSpacing = columnSpacing*(columns-1);
-    final colWidth = (globalMaxWidth - totalSpacing)/ columns;
+    final totalSpacing = columnSpacing * (columns - 1);
+    final colWidth = (globalMaxWidth - totalSpacing) / columns;
 
     var colHeights = List<double>.filled(columns, 0);
     var cols = List.generate(columns, (_) => <LineLayout>[]);
 
-    int col=0;
+    int col = 0;
     for (final line in lines) {
       final needed = (cols[col].isEmpty)
           ? line.height
           : colHeights[col] + lineSpacing + line.height;
-      if (needed<= pageHeight) {
-        if (cols[col].isNotEmpty) colHeights[col]+= lineSpacing;
+      if (needed <= pageHeight) {
+        if (cols[col].isNotEmpty) {
+          colHeights[col] += lineSpacing;
+        }
         cols[col].add(line);
-        colHeights[col]+= line.height;
+        colHeights[col] += line.height;
       } else {
         col++;
-        if (col>= columns) {
-          // Страница заполнена (для одной MultiColumnPage).
-          // Если нужно отрисовать *только* одну страницу – на этом остановимся.
-          // Но если ваш рендер выводит только 1 страницу = 1 MultiColumnPage,
-          // то оставшиеся строки останутся "за бортом".
+        if (col >= columns) {
           break;
         }
         cols[col].add(line);

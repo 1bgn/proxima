@@ -165,6 +165,7 @@ class AssetFB2Loader {
             inlineElements: [TextInlineElement("\n", StylesConfig.baseText)],
             paragraphSpacing: 10,
             breakable: false,
+            minimumLines: 1
           ),
         );
       }
@@ -205,26 +206,37 @@ class AssetFB2Loader {
   /// Рекурсивно обходим детей epigraph,
   /// если встречаем блочные элементы (p, text-author и т.д.), создаём ParagraphBlock
   void _parseEpigraph(XmlElement epigraphNode) {
+    double? epigraphMaxWidth;
+
+    epigraphMaxWidth = 0.7;
+
+    CustomTextAlign? epigraphContainerAlignment;
+
+    epigraphContainerAlignment = CustomTextAlign.right;
     for (final child in epigraphNode.children) {
       if (child is XmlElement) {
         final childTag = child.name.local.toLowerCase();
         if (_isBlockElement(childTag)) {
-          // Создаём (возможно, несколько) абзацев
+          // Получаем блоки для дочернего элемента
           final blocks = _parseBlockOrMulti(child);
-          // Для epigraph можно добавить breakable = true, если хотим,
-          // чтобы эпиграф мог разделяться на границе страницы
+          // Передаем родительские параметры, если они не заданы в самом блоке
           for (final b in blocks) {
+            print("b.inlineElements: ${b.inlineElements} b.containerAlignment:${b.containerAlignment} epigraphContainerAlignment: $epigraphContainerAlignment");
             _allParagraphs.add(
-              b.copyWith(breakable: true, paragraphSpacing: 5),
+              b.copyWith(
+                breakable: true,
+                paragraphSpacing: 5,
+                // Если у блока не задан maxWidth, наследуем от epigraph
+                maxWidth: b.maxWidth ?? epigraphMaxWidth,
+                // Если у блока не задано containerAlignment, наследуем от epigraph
+                containerAlignment: b.containerAlignment ?? epigraphContainerAlignment,
+              ),
             );
           }
         } else {
-          // Если не блочный элемент (например, <strong>), рекурсивно проходим
           _processNode(child);
         }
-      }
-      else if (child is XmlText) {
-        // Если внутри epigraph есть простой текст, создаём ParagraphBlock
+      } else if (child is XmlText) {
         final text = child.text.trim();
         if (text.isNotEmpty) {
           _allParagraphs.add(
@@ -237,7 +249,9 @@ class AssetFB2Loader {
               firstLineIndent: 20,
               paragraphSpacing: 10,
               minimumLines: 1,
-              maxWidth: null,
+              maxWidth: epigraphMaxWidth,
+              // Применяем containerAlignment, если задано
+              containerAlignment: epigraphContainerAlignment,
               isSectionEnd: false,
               breakable: true,
             ),
@@ -246,6 +260,8 @@ class AssetFB2Loader {
       }
     }
   }
+
+
 
   /// Если элемент содержит <p>, возвращаем список ParagraphBlock,
   /// иначе обрабатываем элемент как единый блок
@@ -311,9 +327,10 @@ class AssetFB2Loader {
       case 'p':
         return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
           textAlign: CustomTextAlign.left,
-          firstLineIndent: 20,
+          firstLineIndent: 10,
+
           enableRedLine: true,
-          paragraphSpacing: 15,
+          paragraphSpacing: 0,
         );
       case 'image':
         return _parseParagraph(elem, style: StylesConfig.baseText)?.copyWith(
@@ -339,18 +356,18 @@ class AssetFB2Loader {
         return _parseParagraph(elem, style: StylesConfig.authorFont)?.copyWith(
           textAlign: CustomTextAlign.right,
           firstLineIndent: 0,
-          paragraphSpacing: 15,
+          paragraphSpacing: 0,
         );
       case 'title':
         return _parseParagraph(elem, style: StylesConfig.titleFont)?.copyWith(
           textAlign: CustomTextAlign.center,
 
-          paragraphSpacing: 15,
+          paragraphSpacing: 5,
         );
       case 'subtitle':
         return _parseParagraph(elem, style: StylesConfig.subtitleFont)?.copyWith(
           textAlign: CustomTextAlign.center,
-          paragraphSpacing: 15,
+          paragraphSpacing: 5,
         );
       default:
       // Прочие теги
